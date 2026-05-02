@@ -65,7 +65,7 @@ warn_unused_ignores = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["arq.*", "nanoid.*", "asyncpg.*"]
+module = ["arq.*", "nanoid.*", "asyncpg.*", "redis.*"]
 ignore_missing_imports = true
 
 [tool.pytest.ini_options]

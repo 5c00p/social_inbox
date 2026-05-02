@@ -6,10 +6,12 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import health
+from app.api import health, webhooks
 from app.config import get_settings
 from app.repos.pool import close_pool, run_migrations
+from app.repos.redis_client import close_redis
 from app.utils.logging import get_logger, setup_logging
+from app.workers.enqueue import close_arq
 
 
 @asynccontextmanager
@@ -24,6 +26,8 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     yield
 
     await close_pool()
+    await close_redis()
+    await close_arq()
     log.info("shutdown")
 
 
@@ -35,6 +39,7 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
     app.include_router(health.router)
+    app.include_router(webhooks.router)
     return app
 
 

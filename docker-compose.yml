@@ -33,9 +33,8 @@ services:
         condition: service_healthy
     volumes:
       - ./app:/app/app
-    # Worker command will be configured in Task 06 (arq worker scaffold)
-    # For Task 01, worker is built but stays in idle to not crash.
-    command: ["sleep", "infinity"]
+      - ./migrations:/app/migrations
+    command: ["uv", "run", "arq", "app.workers.arq_settings.WorkerSettings"]
     networks:
       - default
 
@@ -62,6 +61,8 @@ services:
   redis:
     image: redis:7-alpine
     restart: unless-stopped
+    ports:
+      - "6379:6379"
     healthcheck:
       test: ["CMD", "redis-cli", "ping"]
       interval: 5s

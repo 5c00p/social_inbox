@@ -5,6 +5,7 @@ from fastapi import APIRouter, status
 from fastapi.responses import JSONResponse
 
 from app.repos.pool import ping as pg_ping
+from app.repos.redis_client import ping as redis_ping
 
 router = APIRouter(tags=["health"])
 
@@ -17,15 +18,13 @@ async def health() -> dict[str, str]:
 
 @router.get("/ready")
 async def ready() -> JSONResponse:
-    """Readiness probe — checks Postgres connectivity.
-
-    Returns 200 + {"status": "ready"} when DB is reachable.
-    Returns 503 + {"status": "not_ready", "postgres": "down"} otherwise.
-    """
+    """Readiness probe — checks Postgres and Redis."""
     pg_ok = await pg_ping()
-    if pg_ok:
-        return JSONResponse(content={"status": "ready", "postgres": "up"})
-    return JSONResponse(
-        status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-        content={"status": "not_ready", "postgres": "down"},
-    )
+    redis_ok = await redis_ping()
+    body = {
+        "status": "ready" if (pg_ok and redis_ok) else "not_ready",
+        "postgres": "up" if pg_ok else "down",
+        "redis": "up" if redis_ok else "down",
+    }
+    code = status.HTTP_200_OK if (pg_ok and redis_ok) else status.HTTP_503_SERVICE_UNAVAILABLE
+    return JSONResponse(status_code=code, content=body)

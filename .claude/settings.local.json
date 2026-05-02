@@ -13,7 +13,9 @@
       "PowerShell(docker compose ps postgres 2>&1)",
       "PowerShell(uv run ruff check app/ tests/ 2>&1)",
       "PowerShell(uv run mypy app/ 2>&1)",
-      "PowerShell(uv run pytest tests/ -v --tb=short 2>&1)"
+      "PowerShell(uv run pytest tests/ -v --tb=short 2>&1)",
+      "PowerShell(docker compose logs worker 2>&1)",
+      "PowerShell(Invoke-RestMethod -Uri \"http://localhost:8000/ready\")"
     ]
   }
 }

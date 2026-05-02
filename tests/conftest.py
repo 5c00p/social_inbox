@@ -35,9 +35,24 @@ get_settings.cache_clear()
 
 from app.main import app  # noqa: E402
 from app.repos.pool import close_pool, get_pool, run_migrations  # noqa: E402
+from app.repos.redis_client import close_redis  # noqa: E402
+from app.workers.enqueue import close_arq  # noqa: E402
 
 # Tables to truncate between tests (CASCADE handles dependent tables).
 _TRUNCATE_TABLES = "social_users, scenarios, events_log, comment_replies_dedup"
+
+
+@pytest.fixture(autouse=True)
+async def _cleanup_singletons() -> AsyncIterator[None]:
+    """Close Redis and arq singletons after every test.
+
+    Prevents "Event loop is closed" errors when a singleton is created in one
+    test's function-scoped event loop and accessed in the next test's loop.
+    close_pool() is handled separately in _db_setup (only for DB tests).
+    """
+    yield
+    await close_redis()
+    await close_arq()
 
 
 @pytest.fixture
@@ -54,6 +69,7 @@ async def _db_setup() -> AsyncIterator[None]:
         f"TRUNCATE {_TRUNCATE_TABLES} RESTART IDENTITY CASCADE"
     )
     await close_pool()
+    await close_redis()
 
 
 @pytest.fixture
@@ -70,3 +86,19 @@ async def client(_db_setup: None) -> AsyncIterator[AsyncClient]:
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as ac:
         yield ac
+
+
+from app.api.webhooks import _provider_dep  # noqa: E402
+from tests.fakes.fake_provider import FakeProvider  # noqa: E402
+
+
+@pytest.fixture
+async def fake_provider(client: AsyncClient) -> AsyncIterator[FakeProvider]:
+    """Provide a FakeProvider and inject it into the FastAPI app for the test."""
+    fake = FakeProvider()
+    app.dependency_overrides[_provider_dep] = lambda: fake
+    try:
+        yield fake
+    finally:
+        app.dependency_overrides.clear()
+        fake.reset()
