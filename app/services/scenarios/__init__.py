@@ -7,8 +7,9 @@ ScenarioEngine relies on this side-effect: when the package is imported
 (e.g. at app startup), all handlers become available in the registry.
 """
 from app.services.scenarios import (
+    comment_to_dm,
     echo,
     welcome,
 )
 
-__all__ = ["echo", "welcome"]
+__all__ = ["comment_to_dm", "echo", "welcome"]

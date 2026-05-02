@@ -97,27 +97,38 @@ async def handle(
     # Determine keyword context
     context: KeywordContext = "comment" if event.event_type == "comment" else "dm"
 
-    # 1. Try keyword match
-    km: KeywordMatch | None = None
-    if event.text:
-        km = await match_keywords(event.text, context)
-
     scenario_row: asyncpg.Record | None = None
 
-    if km:
-        scenario_row = await scenarios_repo.get_by_id(km.scenario_id)
-        if scenario_row is None:
-            log.warning(
-                "keyword_matched_but_scenario_missing",
-                keyword_id=km.keyword_id,
-                scenario_id=km.scenario_id,
-            )
+    # 1. For comments: check post-specific triggers FIRST (post-local override).
+    if event.event_type == "comment" and event.post_id and event.text:
+        from app.repos import comment_triggers as ct_repo
+        trigger = await ct_repo.find_for_post(event.platform, event.post_id, event.text)
+        if trigger:
+            scenario_row = await scenarios_repo.get_by_id(trigger["scenario_id"])
+            if scenario_row is None:
+                log.warning(
+                    "comment_trigger_scenario_missing",
+                    trigger_id=trigger["id"],
+                    scenario_id=trigger["scenario_id"],
+                )
 
-    # 2. New user, no keyword match → default welcome
+    # 2. Fall back to global keywords match
+    if scenario_row is None and event.text:
+        km: KeywordMatch | None = await match_keywords(event.text, context)
+        if km:
+            scenario_row = await scenarios_repo.get_by_id(km.scenario_id)
+            if scenario_row is None:
+                log.warning(
+                    "keyword_matched_but_scenario_missing",
+                    keyword_id=km.keyword_id,
+                    scenario_id=km.scenario_id,
+                )
+
+    # 3. New user, no keyword match → default welcome
     if scenario_row is None and is_new_user and event.event_type == "message":
         scenario_row = await scenarios_repo.get_default_welcome()
 
-    # 3. Fallback: echo scenario (testing only — replaced in Task 13 by smart/FAQ)
+    # 4. Fallback: echo scenario (testing only — replaced in Task 13 by smart/FAQ)
     if scenario_row is None:
         scenario_row = await scenarios_repo.get_by_name("echo_scenario")
         if scenario_row is None:

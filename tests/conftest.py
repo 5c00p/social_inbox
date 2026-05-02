@@ -91,6 +91,29 @@ async def _db_setup() -> AsyncIterator[None]:
             ],
         },
     )
+    await pool.execute(
+        """
+        INSERT INTO scenarios (name, type, template, metadata, active)
+        VALUES ('default_purify_comment', 'comment_to_dm', $1, $2, TRUE)
+        ON CONFLICT (name) DO NOTHING
+        """,
+        "🌿 Привет, {first_name}! {tg_link}\n\n{disclaimer}",
+        {
+            "tg_scenario_slug": "purify",
+            "public_reply_text": "Отправила в личку 💌",
+            "quick_replies": [{"title": "Перейти в Telegram", "type": "url", "payload": "{tg_link}"}],
+        },
+    )
+    # Re-seed global keyword "очищение" → default_purify_comment
+    await pool.execute(
+        """
+        INSERT INTO keywords (keyword, match_type, context, scenario_id, priority, case_sensitive, active)
+        SELECT 'очищение', 'contains', 'comment', s.id, 50, FALSE, TRUE
+        FROM scenarios s
+        WHERE s.name = 'default_purify_comment'
+        ON CONFLICT DO NOTHING
+        """
+    )
     yield
     pool = await get_pool()
     await pool.execute(
