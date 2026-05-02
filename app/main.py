@@ -1,5 +1,4 @@
 """FastAPI application entry point."""
-
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -9,6 +8,7 @@ from fastapi import FastAPI
 
 from app.api import health
 from app.config import get_settings
+from app.repos.pool import close_pool, run_migrations
 from app.utils.logging import get_logger, setup_logging
 
 
@@ -18,7 +18,12 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     log = get_logger(__name__)
     settings = get_settings()
     log.info("startup", env=settings.env, provider=settings.messaging_provider)
+
+    await run_migrations()
+
     yield
+
+    await close_pool()
     log.info("shutdown")
 
 

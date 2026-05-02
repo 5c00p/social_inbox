@@ -1,0 +1,19 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run *)",
+      "Bash(docker compose *)",
+      "PowerShell(docker compose ps 2>&1)",
+      "PowerShell(docker --version)",
+      "PowerShell(docker compose version)",
+      "PowerShell(docker volume ls --filter name=social 2>&1)",
+      "PowerShell(docker compose up -d --build 2>&1)",
+      "PowerShell(uv run pytest tests/ -v 2>&1)",
+      "PowerShell(docker compose up -d postgres 2>&1)",
+      "PowerShell(docker compose ps postgres 2>&1)",
+      "PowerShell(uv run ruff check app/ tests/ 2>&1)",
+      "PowerShell(uv run mypy app/ 2>&1)",
+      "PowerShell(uv run pytest tests/ -v --tb=short 2>&1)"
+    ]
+  }
+}

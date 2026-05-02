@@ -1,5 +1,4 @@
 """Smoke tests for health endpoints."""
-
 from __future__ import annotations
 
 import pytest
@@ -14,7 +13,9 @@ async def test_health_returns_ok(client: AsyncClient) -> None:
 
 
 @pytest.mark.asyncio
-async def test_ready_returns_ok(client: AsyncClient) -> None:
+async def test_ready_checks_postgres(client: AsyncClient) -> None:
     response = await client.get("/ready")
     assert response.status_code == 200
-    assert response.json() == {"status": "ready"}
+    body = response.json()
+    assert body["status"] == "ready"
+    assert body["postgres"] == "up"
