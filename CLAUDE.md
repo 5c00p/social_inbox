@@ -303,78 +303,26 @@ D:\Work\social_inbox\
 
 ### 7.1. Базовый интерфейс
 
-`app/providers/base.py`:
+`app/providers/base.py` — содержит только `MessagingProvider` ABC.
 
-```python
-from __future__ import annotations
-from abc import ABC, abstractmethod
-from dataclasses import dataclass
-from datetime import datetime
-from typing import Literal
+`app/models/events.py` — содержит `IncomingEvent` и `OutgoingMessage` как
+**Pydantic v2 модели** (изменено vs v1: было `@dataclass(frozen=True)`).
 
-Platform = Literal["instagram", "facebook"]
-Direction = Literal["in", "out"]
-EventType = Literal["message", "comment", "postback"]
+Причины перехода на Pydantic:
+- Модели сериализуются в JSON для arq queue (через Redis)
+- Runtime-валидация литералов (platform, direction, event_type)
+- Pydantic v2 даёт frozen-семантику через `model_config = ConfigDict(frozen=True)`
+- Единый паттерн с остальной кодовой базой проекта
 
+Полные определения см. в реальных файлах. Краткая структура:
 
-@dataclass(frozen=True)
-class IncomingEvent:
-    """Normalized event from any messaging platform."""
-    provider: str                       # 'sendpulse', 'manychat', 'meta'
-    platform: Platform
-    event_type: EventType
-    external_user_id: str               # platform-specific user id (PSID/IGSID)
-    external_event_id: str              # для idempotency
-    username: str | None
-    full_name: str | None
-    text: str | None                    # текст сообщения / комментария
-    media_url: str | None
-    post_id: str | None                 # для comments — id поста
-    comment_id: str | None              # для comments — id самого комментария
-    occurred_at: datetime
-    raw_payload: dict                   # сырой payload от провайдера, для отладки
-
-
-@dataclass(frozen=True)
-class OutgoingMessage:
-    """Message to be sent via provider."""
-    platform: Platform
-    external_user_id: str               # кому отправлять
-    text: str | None
-    quick_replies: list[dict] | None    # [{"title": "...", "payload": "..."}]
-    media_url: str | None
-    reply_to_comment_id: str | None     # если это private reply на comment
-    scenario_id: int | None             # для логов
-
-
-class MessagingProvider(ABC):
-    """Abstraction over messaging platform integration."""
-
-    name: str                           # 'sendpulse' / 'manychat' / 'meta'
-
-    @abstractmethod
-    async def parse_webhook(
-        self, raw_body: bytes, headers: dict[str, str]
-    ) -> list[IncomingEvent]:
-        """Parse and normalize incoming webhook payload.
-
-        Returns empty list if signature invalid (does NOT raise).
-        Returns empty list if it's a non-event ping/health.
-        """
-        ...
-
-    @abstractmethod
-    async def send(self, msg: OutgoingMessage) -> str | None:
-        """Send message via provider API. Returns external message ID or None on failure."""
-        ...
-
-    @abstractmethod
-    async def fetch_user_profile(
-        self, platform: Platform, external_user_id: str
-    ) -> dict:
-        """Fetch user profile (username, full_name, avatar). Optional — may return {}."""
-        ...
-```
+- **IncomingEvent** — нормализованное входящее событие. Поля: provider, platform,
+  event_type, external_user_id, external_event_id, username/full_name (опц.),
+  text/media_url, post_id/comment_id (для comment-event), occurred_at, raw_payload.
+- **OutgoingMessage** — исходящее сообщение. Поля: platform, external_user_id,
+  text/media_url, quick_replies (list[QuickReply]), reply_to_comment_id, scenario_id.
+- **QuickReply** — кнопка под сообщением. Поля: title (max 20), payload.
+- **MessagingProvider** — ABC с методами parse_webhook, send, fetch_user_profile.
 
 ### 7.2. SendPulseProvider
 
@@ -933,8 +881,10 @@ shell:
 - **Конкретизируется:** short_id формат (nanoid 8 chars без `_`)
 - **Удаляется:** Meta App Review задачи (на этом этапе не нужны)
 - **Сохраняется без изменений:** схема БД, ScenarioEngine, ClaudeResponder, safety-фильтры, structlog, asyncpg-стек, docker-compose подход
+- **Уточняется (Task 04):** IncomingEvent и OutgoingMessage — Pydantic v2 модели
+  (было: dataclass). Детали в § 7.1.
 
 ---
 
-**Последнее обновление:** 2026-04-30 (v2 — после анализа bot_purify и выбора SendPulse Free + n8n)
+**Последнее обновление:** 2026-05-02 (v3 — Task 04: MessagingProvider interface)
 **Поддерживается:** Виктор + Claude
