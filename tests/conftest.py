@@ -34,7 +34,6 @@ from app.config import get_settings  # noqa: E402
 get_settings.cache_clear()
 
 from app.main import app  # noqa: E402
-from app.config import get_settings  # noqa: E402
 from app.providers import reset_provider, set_provider  # noqa: E402
 from app.repos.pool import close_pool, get_pool, run_migrations  # noqa: E402
 from app.repos.redis_client import close_redis  # noqa: E402
@@ -69,19 +68,40 @@ async def _db_setup() -> AsyncIterator[None]:
     avoids asyncpg "attached to a different loop" errors.
     """
     await run_migrations()
-    # Re-seed echo_scenario on every test: TRUNCATE in teardown removes it,
-    # and the migration that seeded it only runs once.
+    # Re-seed reference scenarios after each TRUNCATE — migrations run once,
+    # but TRUNCATE in teardown wipes all scenario rows.
     pool = await get_pool()
     await pool.execute(
         "INSERT INTO scenarios (name, type, template, active)"
         " VALUES ('echo_scenario', 'echo', 'Received: {text}', TRUE)"
         " ON CONFLICT (name) DO NOTHING"
     )
+    await pool.execute(
+        """
+        INSERT INTO scenarios (name, type, template, metadata, active)
+        VALUES ('default_welcome', 'welcome', $1, $2, TRUE)
+        ON CONFLICT (name) DO NOTHING
+        """,
+        "🌿 Привет, {first_name}!\n\n{tg_link}\n\n{disclaimer}",
+        {
+            "tg_scenario_slug": "purify",
+            "quick_replies": [
+                {"title": "Перейти в Telegram", "type": "url", "payload": "{tg_link}"},
+                {"title": "Узнать больше", "type": "postback", "payload": "more_info"},
+            ],
+        },
+    )
     yield
     pool = await get_pool()
     await pool.execute(
         f"TRUNCATE {_TRUNCATE_TABLES} RESTART IDENTITY CASCADE"
     )
+    # Flush Redis DB to prevent key collisions between tests.
+    # Tests use DB index 1 (separate from prod DB 0). TRUNCATE resets PK sequences
+    # to 1, so user_id=1 in test A and test B are different users sharing same Redis keys.
+    from app.repos.redis_client import get_redis
+    redis = await get_redis()
+    await redis.flushdb()
     await close_pool()
     await close_redis()
 

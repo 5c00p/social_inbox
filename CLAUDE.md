@@ -554,6 +554,30 @@ Auth: Basic Auth на этапе MVP.
 
 **Менять при компрометации** — простая операция, оба сервиса перезапустить.
 
+### 10.5. Формат deep-link
+
+Зафиксированный формат deep-link (используется `lead_tracker.build_deep_link`):
+
+    https://t.me/{telegram_bot_username}?start=ig_{short_id}_{scenario_slug}
+
+Правила:
+- `short_id` — 8 chars `[0-9A-Za-z]`, без `_` и `-` (см. `app/utils/short_id.py`)
+- `scenario_slug` — lowercase ASCII `[a-z0-9-]+`, без `_` и пробелов
+- bot_purify парсит payload по первому `_` после префикса `ig_` →
+  `(short_id, scenario_slug)`. См. `bot_purify/handlers/start.py:_parse_deep_link`.
+- Известные слаги: `purify`, `oils`, `faq`. Новые слаги добавляются по согласованию
+  с командой bot_purify (могут понадобиться отдельные приветствия).
+
+### 10.6. lead_tracker сервис
+
+`app/services/lead_tracker.py` — единая точка работы с переходом «social → Telegram»:
+
+- `build_deep_link(short_id, slug)` — формирует URL по правилам §10.5
+- `was_welcome_sent(user_id)` / `mark_welcome_sent(user_id)` — Redis-флаги
+  lifetime-idempotency для welcome (TTL 180 дней)
+- `record_handover(user_id, tg_user_id)` — отметка успешного перехода
+  (вызывается из endpoint'а в Task 11)
+
 ---
 
 ## 11. Правила кода

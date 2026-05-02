@@ -17,7 +17,7 @@ KeywordContext = Literal["dm", "comment", "both"]
 async def list_active(context: KeywordContext) -> list[asyncpg.Record]:
     """Return active keywords applicable to the given context, ordered by priority asc."""
     pool = await get_pool()
-    return await pool.fetch(  # type: ignore[return-value]
+    return await pool.fetch(  # type: ignore[no-any-return]
         """
         SELECT id, keyword, match_type, context, scenario_id, priority, case_sensitive
         FROM keywords

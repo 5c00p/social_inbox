@@ -1,6 +1,8 @@
 """End-to-end test: webhook → DB → scenario → reply → DB.
 
-The biggest payoff test of Task 07: confirms the full pipeline works.
+Tests the full pipeline for a returning user (welcome already sent), which
+triggers the echo fallback scenario. New-user welcome flow is covered by
+test_e2e_welcome_pipeline.py.
 """
 from __future__ import annotations
 
@@ -11,6 +13,7 @@ from httpx import AsyncClient
 
 from app.models.events import IncomingEvent
 from app.repos import users
+from app.services import lead_tracker
 from app.workers.tasks_messages import process_incoming_event
 from tests.fakes.fake_provider import FakeProvider
 
@@ -21,7 +24,19 @@ async def test_full_pipeline_echo(
     fake_provider: FakeProvider,
     db,
 ) -> None:
-    """Webhook → events_log → worker → scenario → provider.send → outgoing message in DB."""
+    """Webhook → events_log → worker → echo scenario → provider.send → outgoing message in DB.
+
+    Uses a pre-existing user with welcome already sent so the engine routes to echo.
+    """
+    # Pre-create user so is_new_user=False and engine falls through to echo.
+    user = await users.create(
+        provider_name="sendpulse",
+        platform="instagram",
+        external_id="e2e_user_1",
+        username="e2e_user",
+    )
+    await lead_tracker.mark_welcome_sent(user["id"])
+
     event = IncomingEvent(
         provider="sendpulse",
         platform="instagram",
@@ -56,11 +71,11 @@ async def test_full_pipeline_echo(
     assert log_after["processed_at"] is not None
     assert log_after["error"] is None
 
-    # 4. User exists
+    # 4. User still exists
     user = await users.get_by_external("sendpulse", "instagram", "e2e_user_1")
     assert user is not None
 
-    # 5. Two messages: incoming and outgoing
+    # 5. Two messages: incoming and outgoing echo
     msgs = await db.fetch(
         """
         SELECT m.* FROM messages m
