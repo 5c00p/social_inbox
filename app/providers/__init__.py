@@ -22,6 +22,7 @@ __all__ = [
     "MessagingProvider",
     "get_provider",
     "reset_provider",
+    "set_provider",
 ]
 
 
@@ -57,6 +58,12 @@ def get_provider() -> MessagingProvider:
         raise ValueError(f"Unknown messaging provider: {provider_name!r}")
 
     return _singleton
+
+
+def set_provider(provider: MessagingProvider) -> None:
+    """Override the singleton with a specific instance. Tests-only."""
+    global _singleton
+    _singleton = provider
 
 
 def reset_provider() -> None:

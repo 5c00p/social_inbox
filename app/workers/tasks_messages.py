@@ -1,31 +1,35 @@
 """arq task: process a single IncomingEvent.
 
-This is the SOLE consumer of the events queue.
-
-What it does (in this task):
-1. Idempotency check: if events_log.processed_at IS NOT NULL → skip
-2. Find or create social_user
+Pipeline (post-Task 07):
+1. Idempotency: if events_log.processed_at already set → skip
+2. Find or create social_user (track is_new_user)
 3. Find or create active conversation
-4. Insert message with direction='in'
-5. Bump social_users.last_message_at and conversations.last_message_at
-6. Mark events_log row as processed
+4. Insert incoming message (direction='in')
+5. Bump last_message_at on user and conversation
+6. Run ScenarioEngine.handle() → maybe OutgoingMessage
+7. If reply produced AND rate limit allows AND not blocked by safety:
+    a. provider.send(OutgoingMessage) → external_message_id
+    b. Insert outgoing message (direction='out')
+8. Mark events_log row as processed
 
-What it does NOT do (yet):
-- Run scenarios (Task 07)
-- Generate replies (Task 13 — Claude)
-- Apply safety filters (Task 14)
-- Send anything outbound
-
-The full pipeline grows from this scaffold in subsequent tasks.
+Future expansions (later tasks):
+- Task 13: Claude-based smart scenarios + tool use for handover
+- Task 14: safety filters on outgoing messages
+- Task 14: per-user daily/lifetime rate limits
 """
 from __future__ import annotations
 
+import uuid
 from datetime import UTC, datetime
 from typing import Any
 
-from app.models.events import IncomingEvent
+import app.services.scenarios  # noqa: F401 — triggers @register_scenario side-effects
+from app.models.events import IncomingEvent, OutgoingMessage
+from app.providers import get_provider
 from app.repos import conversations, messages, users
 from app.repos import events as events_repo
+from app.services import scenario_engine
+from app.services.rate_limiter import can_reply
 from app.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -36,16 +40,9 @@ async def process_incoming_event(
     event_dict: dict[str, Any],
     log_id: int,
 ) -> None:
-    """Process a single event from the queue.
-
-    Args:
-        ctx: arq job context (unused for now, available for DB pool reuse later)
-        event_dict: serialized IncomingEvent (model_dump(mode='json'))
-        log_id: id of the events_log row to mark as processed at the end
-    """
     event = IncomingEvent.model_validate(event_dict)
 
-    # 1. Idempotency check — was this event_id already processed?
+    # 1. Idempotency
     if await events_repo.is_already_processed(event.provider, event.external_event_id):
         log.info(
             "event_skipped_already_processed",
@@ -64,10 +61,11 @@ async def process_incoming_event(
     )
 
     try:
-        # 2. Find or create social_user
+        # 2. User
         user = await users.get_by_external(
             event.provider, event.platform, event.external_user_id,
         )
+        is_new_user = user is None
         if user is None:
             user = await users.create(
                 provider_name=event.provider,
@@ -83,11 +81,11 @@ async def process_incoming_event(
                 external_id=event.external_user_id,
             )
 
-        # 3. Find or create active conversation
+        # 3. Conversation
         conv = await conversations.get_or_create(user["id"], event.platform)
 
-        # 4. Insert message
-        msg = await messages.insert(
+        # 4. Insert incoming
+        await messages.insert(
             conversation_id=conv["id"],
             direction="in",
             text=event.text,
@@ -96,28 +94,67 @@ async def process_incoming_event(
             external_message_id=event.external_event_id,
             raw_payload=event.raw_payload,
         )
-        if msg is None:
-            log.info(
-                "message_skipped_duplicate",
-                external_event_id=event.external_event_id,
-            )
 
         # 5. Bump timestamps
         await users.update_last_message_at(user["id"], event.occurred_at)
         await conversations.update_last_message_at(conv["id"], event.occurred_at)
 
-        # 6. Mark event processed (success)
-        await events_repo.mark_processed(log_id, error=None)
+        # 6. Scenario engine
+        outgoing = await scenario_engine.handle(event, user, conv, is_new_user=is_new_user)
 
+        # 7. Send reply if produced
+        if outgoing is not None:
+            await _send_and_record(outgoing, conv["id"], user["id"])
+
+        # 8. Mark processed
+        await events_repo.mark_processed(log_id, error=None)
         log.info("event_processed_ok", log_id=log_id, user_id=user["id"], conv_id=conv["id"])
+
     except Exception as exc:
         log.exception("event_processing_failed", log_id=log_id, error=str(exc))
         await events_repo.mark_processed(log_id, error=str(exc)[:500])
-        raise  # arq retries with exponential backoff
+        raise
+
+
+async def _send_and_record(
+    outgoing: OutgoingMessage,
+    conversation_id: int,
+    user_id: int,
+) -> None:
+    """Send outbound message via provider and record it in messages table."""
+    if not await can_reply(user_id):
+        log.warning("reply_throttled", user_id=user_id)
+        return
+
+    provider = get_provider()
+    try:
+        external_id = await provider.send(outgoing)
+    except Exception as exc:
+        log.exception("provider_send_failed", user_id=user_id, error=str(exc))
+        external_id = None
+
+    # If provider didn't return an ID, generate a local one to satisfy UNIQUE constraint.
+    record_external_id = external_id if external_id else f"local:{uuid.uuid4()}"
+
+    await messages.insert(
+        conversation_id=conversation_id,
+        direction="out",
+        text=outgoing.text,
+        media_url=outgoing.media_url,
+        source="reply",
+        scenario_id=outgoing.scenario_id,
+        external_message_id=record_external_id,
+    )
+
+    log.info(
+        "outgoing_sent",
+        user_id=user_id,
+        scenario_id=outgoing.scenario_id,
+        send_ok=external_id is not None,
+    )
 
 
 def _source_from_event_type(event_type: str) -> str:
-    """Map EventType to messages.source value."""
     return {
         "message": "dm",
         "comment": "comment",

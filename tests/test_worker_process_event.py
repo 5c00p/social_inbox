@@ -95,15 +95,17 @@ async def test_process_event_idempotent_via_events_log(db) -> None:
     # Second processing — should skip
     await process_incoming_event({}, event.model_dump(mode="json"), log_row["id"])
 
-    # Only one message in DB
+    # Exactly 2 messages (1 in + 1 out echo) — NOT 4, proving the second call was a no-op.
     user = await users.get_by_external("sendpulse", "instagram", event.external_user_id)
     assert user is not None
     conv = await conversations.get_active(user["id"], "instagram")
     rows = await db.fetch(
-        "SELECT * FROM messages WHERE conversation_id = $1",
+        "SELECT direction FROM messages WHERE conversation_id = $1 ORDER BY id",
         conv["id"],
     )
-    assert len(rows) == 1
+    assert len(rows) == 2
+    assert rows[0]["direction"] == "in"
+    assert rows[1]["direction"] == "out"
 
 
 @pytest.mark.asyncio

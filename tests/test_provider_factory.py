@@ -10,10 +10,17 @@ from app.providers.sendpulse import SendPulseProvider
 
 @pytest.fixture(autouse=True)
 def _reset() -> None:
-    """Reset singleton before each test."""
+    """Reset provider singleton and settings cache before/after each test.
+
+    monkeypatch restores env vars but cannot clear lru_cache, so we must
+    clear get_settings explicitly to prevent stale 'meta'/'manychat' config
+    from leaking into subsequent tests.
+    """
     reset_provider()
+    get_settings.cache_clear()
     yield
     reset_provider()
+    get_settings.cache_clear()
 
 
 def test_factory_returns_sendpulse_by_default() -> None:

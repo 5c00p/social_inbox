@@ -34,6 +34,8 @@ from app.config import get_settings  # noqa: E402
 get_settings.cache_clear()
 
 from app.main import app  # noqa: E402
+from app.config import get_settings  # noqa: E402
+from app.providers import reset_provider, set_provider  # noqa: E402
 from app.repos.pool import close_pool, get_pool, run_migrations  # noqa: E402
 from app.repos.redis_client import close_redis  # noqa: E402
 from app.workers.enqueue import close_arq  # noqa: E402
@@ -44,15 +46,19 @@ _TRUNCATE_TABLES = "social_users, scenarios, events_log, comment_replies_dedup"
 
 @pytest.fixture(autouse=True)
 async def _cleanup_singletons() -> AsyncIterator[None]:
-    """Close Redis and arq singletons after every test.
+    """Close all singletons after every test.
 
     Prevents "Event loop is closed" errors when a singleton is created in one
     test's function-scoped event loop and accessed in the next test's loop.
-    close_pool() is handled separately in _db_setup (only for DB tests).
+    Also covers the case where _db_setup setup fails (exception before yield
+    means its own teardown code never runs).
     """
     yield
+    await close_pool()
     await close_redis()
     await close_arq()
+    reset_provider()
+    get_settings.cache_clear()
 
 
 @pytest.fixture
@@ -63,6 +69,14 @@ async def _db_setup() -> AsyncIterator[None]:
     avoids asyncpg "attached to a different loop" errors.
     """
     await run_migrations()
+    # Re-seed echo_scenario on every test: TRUNCATE in teardown removes it,
+    # and the migration that seeded it only runs once.
+    pool = await get_pool()
+    await pool.execute(
+        "INSERT INTO scenarios (name, type, template, active)"
+        " VALUES ('echo_scenario', 'echo', 'Received: {text}', TRUE)"
+        " ON CONFLICT (name) DO NOTHING"
+    )
     yield
     pool = await get_pool()
     await pool.execute(
@@ -94,9 +108,14 @@ from tests.fakes.fake_provider import FakeProvider  # noqa: E402
 
 @pytest.fixture
 async def fake_provider(client: AsyncClient) -> AsyncIterator[FakeProvider]:
-    """Provide a FakeProvider and inject it into the FastAPI app for the test."""
+    """Inject FakeProvider into both FastAPI routes and the provider singleton.
+
+    FastAPI dependency override covers webhook endpoints.
+    set_provider covers workers that call get_provider() directly.
+    """
     fake = FakeProvider()
     app.dependency_overrides[_provider_dep] = lambda: fake
+    set_provider(fake)
     try:
         yield fake
     finally:
