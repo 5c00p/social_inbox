@@ -1,7 +1,10 @@
 """End-to-end test: new user's first DM triggers welcome with deep-link."""
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import AsyncClient
@@ -9,9 +12,27 @@ from httpx import AsyncClient
 from app.models.events import IncomingEvent
 from app.repos import events as events_repo
 from app.repos import users
-from app.services import lead_tracker
+from app.services import claude_responder, lead_tracker
 from app.workers.tasks_messages import process_incoming_event
 from tests.fakes.fake_provider import FakeProvider
+
+
+@dataclass
+class _FakeUsage:
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass
+class _FakeContentText:
+    type: str = "text"
+    text: str = ""
+
+
+@dataclass
+class _FakeResponse:
+    content: list[Any]
+    usage: _FakeUsage
 
 
 @pytest.mark.asyncio
@@ -74,8 +95,19 @@ async def test_returning_user_does_not_get_welcome_again(
     client: AsyncClient,
     fake_provider: FakeProvider,
     db,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """If welcome was already sent (Redis flag set), second message → echo fallback."""
+    """If welcome was already sent (Redis flag set), second message → smart fallback, no deep-link."""
+    # Mock Anthropic so smart scenario produces a reply
+    fake_client = MagicMock()
+    fake_messages = MagicMock()
+    fake_messages.create = AsyncMock(return_value=_FakeResponse(
+        content=[_FakeContentText(text="Конечно, расскажу подробнее 🌿")],
+        usage=_FakeUsage(input_tokens=60, output_tokens=12),
+    ))
+    fake_client.messages = fake_messages
+    monkeypatch.setattr(claude_responder, "_client", fake_client)
+
     user = await users.create(
         provider_name="sendpulse",
         platform="instagram",
@@ -116,5 +148,6 @@ async def test_returning_user_does_not_get_welcome_again(
     )
     assert len(msgs) == 1
     out_text = msgs[0]["text"]
-    assert "Получено:" in out_text
+    # Smart reply should not contain a Telegram deep-link (that's only in welcome)
     assert "ig_" not in out_text
+    assert msgs[0]["claude_used"] is True

@@ -38,8 +38,40 @@ def _make_event(
 
 
 @pytest.mark.asyncio
-async def test_engine_falls_back_to_echo_when_no_match(db) -> None:
-    """No keywords seeded, no welcome → echo fallback fires."""
+async def test_engine_falls_back_to_smart_when_no_match(
+    db, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """No keywords seeded, no welcome → smart fallback fires, Claude returns reply."""
+    from dataclasses import dataclass
+    from typing import Any
+    from unittest.mock import AsyncMock, MagicMock
+
+    from app.services import claude_responder
+
+    @dataclass
+    class _FakeUsage:
+        input_tokens: int
+        output_tokens: int
+
+    @dataclass
+    class _FakeContentText:
+        type: str = "text"
+        text: str = ""
+
+    @dataclass
+    class _FakeResp:
+        content: list[Any]
+        usage: _FakeUsage
+
+    fake_client = MagicMock()
+    fake_messages = MagicMock()
+    fake_messages.create = AsyncMock(return_value=_FakeResp(
+        content=[_FakeContentText(text="Привет! Чем могу помочь? 🌿")],
+        usage=_FakeUsage(input_tokens=50, output_tokens=10),
+    ))
+    fake_client.messages = fake_messages
+    monkeypatch.setattr(claude_responder, "_client", fake_client)
+
     user = await users.create(
         provider_name="sendpulse", platform="instagram", external_id="engine_no_match",
     )
@@ -50,8 +82,10 @@ async def test_engine_falls_back_to_echo_when_no_match(db) -> None:
 
     assert msg is not None
     assert msg.text is not None
-    assert "Получено:" in msg.text
-    assert "random text" in msg.text
+    assert "Привет" in msg.text
+    # claude_metadata is populated
+    assert msg.claude_metadata is not None
+    assert msg.claude_metadata["model"] is not None
 
 
 @pytest.mark.asyncio

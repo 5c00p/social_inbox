@@ -114,6 +114,13 @@ async def _db_setup() -> AsyncIterator[None]:
         ON CONFLICT DO NOTHING
         """
     )
+    await pool.execute(
+        """
+        INSERT INTO scenarios (name, type, template, metadata, active)
+        VALUES ('default_smart', 'smart', NULL, '{"claude_model": null}'::jsonb, TRUE)
+        ON CONFLICT (name) DO NOTHING
+        """
+    )
     yield
     pool = await get_pool()
     await pool.execute(

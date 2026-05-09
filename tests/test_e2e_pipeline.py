@@ -1,34 +1,66 @@
 """End-to-end test: webhook → DB → scenario → reply → DB.
 
 Tests the full pipeline for a returning user (welcome already sent), which
-triggers the echo fallback scenario. New-user welcome flow is covered by
+triggers the smart fallback scenario. New-user welcome flow is covered by
 test_e2e_welcome_pipeline.py.
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from datetime import UTC, datetime
+from typing import Any
+from unittest.mock import AsyncMock, MagicMock
 
 import pytest
 from httpx import AsyncClient
 
 from app.models.events import IncomingEvent
 from app.repos import users
-from app.services import lead_tracker
+from app.services import claude_responder, lead_tracker
 from app.workers.tasks_messages import process_incoming_event
 from tests.fakes.fake_provider import FakeProvider
 
 
+@dataclass
+class _FakeUsage:
+    input_tokens: int
+    output_tokens: int
+
+
+@dataclass
+class _FakeContentText:
+    type: str = "text"
+    text: str = ""
+
+
+@dataclass
+class _FakeResponse:
+    content: list[Any]
+    usage: _FakeUsage
+
+
 @pytest.mark.asyncio
-async def test_full_pipeline_echo(
+async def test_full_pipeline_smart(
     client: AsyncClient,
     fake_provider: FakeProvider,
     db,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Webhook → events_log → worker → echo scenario → provider.send → outgoing message in DB.
+    """Webhook → events_log → worker → smart scenario → Claude → provider.send → outgoing message in DB.
 
-    Uses a pre-existing user with welcome already sent so the engine routes to echo.
+    Uses a pre-existing user with welcome already sent so the engine routes to smart.
     """
-    # Pre-create user so is_new_user=False and engine falls through to echo.
+    # Mock Anthropic so no real API call is made
+    fake_client = MagicMock()
+    fake_messages = MagicMock()
+    fake_messages.create = AsyncMock(return_value=_FakeResponse(
+        content=[_FakeContentText(text="Отличный вопрос! 🌿")],
+        usage=_FakeUsage(input_tokens=80, output_tokens=15),
+    ))
+    fake_client.messages = fake_messages
+    monkeypatch.setattr(claude_responder, "_client", fake_client)
+
+    # Pre-create user so is_new_user=False and engine falls through to smart.
     user = await users.create(
         provider_name="sendpulse",
         platform="instagram",
@@ -75,7 +107,7 @@ async def test_full_pipeline_echo(
     user = await users.get_by_external("sendpulse", "instagram", "e2e_user_1")
     assert user is not None
 
-    # 5. Two messages: incoming and outgoing echo
+    # 5. Two messages: incoming and outgoing smart reply
     msgs = await db.fetch(
         """
         SELECT m.* FROM messages m
@@ -89,12 +121,12 @@ async def test_full_pipeline_echo(
     assert msgs[0]["direction"] == "in"
     assert msgs[0]["text"] == "привет"
     assert msgs[1]["direction"] == "out"
-    assert "Получено:" in msgs[1]["text"]
+    assert msgs[1]["text"] is not None
     assert msgs[1]["scenario_id"] is not None
+    assert msgs[1]["claude_used"] is True
 
     # 6. Provider received the outgoing message
     assert len(fake_provider.sent) == 1
     sent = fake_provider.sent[0]
     assert sent.platform == "instagram"
     assert sent.external_user_id == "e2e_user_1"
-    assert "Получено:" in (sent.text or "")

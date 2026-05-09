@@ -136,6 +136,7 @@ async def _send_and_record(
     # If provider didn't return an ID, generate a local one to satisfy UNIQUE constraint.
     record_external_id = external_id if external_id else f"local:{uuid.uuid4()}"
 
+    cm = outgoing.claude_metadata or {}
     await messages.insert(
         conversation_id=conversation_id,
         direction="out",
@@ -143,6 +144,10 @@ async def _send_and_record(
         media_url=outgoing.media_url,
         source="reply",
         scenario_id=outgoing.scenario_id,
+        claude_used=bool(cm),
+        claude_model=cm.get("model"),
+        claude_tokens_in=cm.get("tokens_in"),
+        claude_tokens_out=cm.get("tokens_out"),
         external_message_id=record_external_id,
     )
 
