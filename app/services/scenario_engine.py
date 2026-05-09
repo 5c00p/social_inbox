@@ -128,11 +128,11 @@ async def handle(
     if scenario_row is None and is_new_user and event.event_type == "message":
         scenario_row = await scenarios_repo.get_default_welcome()
 
-    # 4. Fallback: echo scenario (testing only — replaced in Task 13 by smart/FAQ)
+    # 4. Fallback: smart scenario (Claude-powered; was echo_scenario in early dev)
     if scenario_row is None:
-        scenario_row = await scenarios_repo.get_by_name("echo_scenario")
+        scenario_row = await scenarios_repo.get_by_name("default_smart")
         if scenario_row is None:
-            log.warning("no_scenario_resolved_and_echo_missing")
+            log.warning("no_scenario_resolved_and_smart_missing")
             return None
 
     # Dispatch
