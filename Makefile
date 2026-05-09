@@ -36,3 +36,9 @@ test:
 
 shell:
 	docker compose exec api python
+
+admin-local:
+	uv run streamlit run admin/streamlit_app.py --server.port 8501
+
+admin-logs:
+	docker compose logs -f admin

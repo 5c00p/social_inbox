@@ -71,6 +71,25 @@ services:
     networks:
       - default
 
+  admin:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile.admin
+    restart: unless-stopped
+    env_file: .env
+    ports:
+      - "8501:8501"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - ./app:/app/app
+      - ./admin:/app/admin
+    networks:
+      - default
+
 networks:
   default:
     name: social-inbox-default
