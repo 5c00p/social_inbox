@@ -25,6 +25,10 @@ log = get_logger(__name__)
 REPLIES_PER_MINUTE_LIMIT = 5
 REPLIES_PER_MINUTE_WINDOW = 60
 
+# Per-user daily reply cap (CLAUDE.md §12.4)
+REPLIES_PER_DAY_LIMIT = 10
+REPLIES_PER_DAY_WINDOW = 60 * 60 * 24  # 86400 seconds
+
 
 async def check_and_increment(
     key: str,
@@ -55,4 +59,19 @@ async def can_reply(user_id: int) -> bool:
     )
     if not allowed:
         log.warning("rate_limit_hit_replies_per_minute", user_id=user_id)
+    return allowed
+
+
+async def can_reply_daily(user_id: int) -> bool:
+    """Returns True if user is under daily reply limit.
+
+    Rolling 24h window starting at first reply. Implementation: same INCR+EXPIRE
+    as per-minute, just longer window. Approximate but cheap.
+    """
+    key = f"rl:reply:day:{user_id}"
+    allowed = await check_and_increment(
+        key, REPLIES_PER_DAY_LIMIT, REPLIES_PER_DAY_WINDOW,
+    )
+    if not allowed:
+        log.warning("rate_limit_hit_replies_per_day", user_id=user_id)
     return allowed

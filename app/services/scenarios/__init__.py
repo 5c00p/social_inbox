@@ -9,8 +9,9 @@ ScenarioEngine relies on this side-effect: when the package is imported
 from app.services.scenarios import (
     comment_to_dm,
     echo,  # kept for tests/back-compat
+    handover,
     smart,
     welcome,
 )
 
-__all__ = ["comment_to_dm", "echo", "smart", "welcome"]
+__all__ = ["comment_to_dm", "echo", "handover", "smart", "welcome"]

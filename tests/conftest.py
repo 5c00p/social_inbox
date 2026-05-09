@@ -121,6 +121,30 @@ async def _db_setup() -> AsyncIterator[None]:
         ON CONFLICT (name) DO NOTHING
         """
     )
+    await pool.execute(
+        """
+        INSERT INTO scenarios (name, type, template, metadata, active)
+        VALUES ('default_handover', 'handover', $1, '{}'::jsonb, TRUE)
+        ON CONFLICT (name) DO NOTHING
+        """,
+        "Хорошо! 💚 Передаю Юле — она ответит лично в течение нескольких часов.\n\nЕсли вопрос срочный, напиши пожалуйста чем могу помочь дополнительно.",
+    )
+    await pool.execute(
+        """
+        INSERT INTO keywords (keyword, match_type, context, scenario_id, priority, case_sensitive, active)
+        SELECT 'оператор', 'contains', 'dm', s.id, 5, FALSE, TRUE
+        FROM scenarios s WHERE s.name = 'default_handover'
+        ON CONFLICT DO NOTHING
+        """
+    )
+    await pool.execute(
+        """
+        INSERT INTO keywords (keyword, match_type, context, scenario_id, priority, case_sensitive, active)
+        SELECT 'администратор', 'contains', 'dm', s.id, 5, FALSE, TRUE
+        FROM scenarios s WHERE s.name = 'default_handover'
+        ON CONFLICT DO NOTHING
+        """
+    )
     yield
     pool = await get_pool()
     await pool.execute(

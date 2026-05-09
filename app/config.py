@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     public_base_url: str = "http://localhost:8000"
     telegram_bot_username: str = "yuliya_purify_bot"
 
+    # --- Notification bot (admin alerts to Yulia) ---
+    notification_bot_token: str = ""
+    notification_admin_chat_id: int = 0
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

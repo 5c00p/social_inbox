@@ -28,8 +28,8 @@ from app.models.events import IncomingEvent, OutgoingMessage
 from app.providers import get_provider
 from app.repos import conversations, messages, users
 from app.repos import events as events_repo
-from app.services import scenario_engine
-from app.services.rate_limiter import can_reply
+from app.services import handover, safety, scenario_engine
+from app.services.rate_limiter import can_reply, can_reply_daily
 from app.utils.logging import get_logger
 
 log = get_logger(__name__)
@@ -99,6 +99,30 @@ async def process_incoming_event(
         await users.update_last_message_at(user["id"], event.occurred_at)
         await conversations.update_last_message_at(conv["id"], event.occurred_at)
 
+        # 5b. Pre-emptive safety triage on incoming DMs
+        # (skipped for comments — symptom/operator keyword in a public Reels comment
+        #  is unusual; comment-to-DM scenario handles comments normally)
+        if event.event_type == "message" and event.text:
+            safety_check = safety.check_incoming(event.text)
+            if safety_check.trigger == "symptom":
+                log.info(
+                    "incoming_symptom_detected",
+                    user_id=user["id"],
+                    matched=safety_check.matched_text,
+                )
+                await handover.trigger_handover(
+                    conversation=conv,
+                    user=user,
+                    source="symptom_detected",
+                    reason=f"matched: {safety_check.matched_text}",
+                )
+                # Skip scenario engine — Yulia takes over
+                await events_repo.mark_processed(log_id, error=None)
+                log.info("event_processed_ok", log_id=log_id, user_id=user["id"], conv_id=conv["id"])
+                return
+            # operator_request goes through scenario engine normally:
+            # keyword "оператор" → handover scenario → polite ack sent to user
+
         # 6. Scenario engine
         outgoing = await scenario_engine.handle(event, user, conv, is_new_user=is_new_user)
 
@@ -123,7 +147,10 @@ async def _send_and_record(
 ) -> None:
     """Send outbound message via provider and record it in messages table."""
     if not await can_reply(user_id):
-        log.warning("reply_throttled", user_id=user_id)
+        log.warning("reply_throttled_per_minute", user_id=user_id)
+        return
+    if not await can_reply_daily(user_id):
+        log.warning("reply_throttled_per_day", user_id=user_id)
         return
 
     provider = get_provider()
