@@ -2,20 +2,18 @@
 
 Run worker:
     arq app.workers.arq_settings.WorkerSettings
-
-Tasks defined here are auto-registered by arq.
 """
 from __future__ import annotations
 
-import asyncio
-import contextlib
 from typing import Any, ClassVar
 
+from arq import cron
 from arq.connections import RedisSettings
 
 from app.config import get_settings
 from app.workers.heartbeat import heartbeat_tick
 from app.workers.tasks_messages import process_incoming_event
+from app.workers.tasks_watchdog import daily_digest, watchdog_check
 
 
 def _redis_settings() -> RedisSettings:
@@ -28,23 +26,32 @@ class WorkerSettings:
 
     redis_settings = _redis_settings()
 
-    # Tasks
-    functions: ClassVar[list[Any]] = [process_incoming_event]
+    functions: ClassVar[list[Any]] = [process_incoming_event, watchdog_check, daily_digest]
 
-    # Heartbeat registered via on_startup loop (see below)
-    cron_jobs: ClassVar[list[Any]] = []
+    cron_jobs: ClassVar[list[Any]] = [
+        # Watchdog: every minute
+        cron(watchdog_check, minute=set(range(60)), run_at_startup=False),
+        # Daily digest: 09:00 Europe/Vilnius (UTC+2 winter, UTC+3 summer).
+        # We schedule by UTC; pick 07:00 UTC ≈ 09:00–10:00 local.
+        cron(daily_digest, hour={7}, minute={0}, run_at_startup=False),
+    ]
 
-    # Concurrency
     max_jobs = 10
-    job_timeout = 60      # seconds — webhook events should be fast
-    keep_result = 60      # seconds to keep job result in Redis (for debugging)
-    max_tries = 3         # exponential retry on exception
-
-    # Logging
+    job_timeout = 60
+    keep_result = 60
+    max_tries = 3
     log_results = True
 
     @staticmethod
     async def on_startup(ctx: dict[str, Any]) -> None:
+        import asyncio
+
+        from app.observability.sentry import init_sentry
+        from app.utils.logging import setup_logging
+
+        setup_logging()
+        init_sentry("worker")
+
         ctx["heartbeat_task"] = asyncio.create_task(_heartbeat_loop())
 
     @staticmethod
@@ -56,6 +63,9 @@ class WorkerSettings:
 
 async def _heartbeat_loop() -> None:
     """Background task: write timestamp to Redis every 60 seconds."""
+    import asyncio
+    import contextlib
+
     while True:
         with contextlib.suppress(Exception):
             await heartbeat_tick()

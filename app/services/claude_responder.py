@@ -23,6 +23,7 @@ from anthropic import AsyncAnthropic
 from anthropic._exceptions import APIError, APIStatusError
 
 from app.config import get_settings
+from app.observability.claude_health import record_failure, record_success
 from app.repos import messages as messages_repo
 from app.repos import token_budget
 from app.utils.logging import get_logger
@@ -150,6 +151,7 @@ async def respond(
             status=exc.status_code,
             message=str(exc)[:200],
         )
+        await record_failure()
         return None
     except APIError as exc:
         log.warning(
@@ -157,13 +159,16 @@ async def respond(
             user_id=user_id,
             error=str(exc)[:200],
         )
+        await record_failure()
         return None
     except Exception as exc:
         log.exception("claude_unexpected_error", user_id=user_id, error=str(exc))
+        await record_failure()
         return None
 
     tokens_in = response.usage.input_tokens
     tokens_out = response.usage.output_tokens
+    await record_success()
     await token_budget.record_usage(user_id, tokens_in, tokens_out)
 
     # Inspect content blocks
