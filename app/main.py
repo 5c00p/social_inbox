@@ -8,6 +8,7 @@ from fastapi import FastAPI
 
 from app.api import health, webhooks
 from app.config import get_settings
+from app.observability.sentry import init_sentry
 from app.repos.pool import close_pool, run_migrations
 from app.repos.redis_client import close_redis
 from app.utils.logging import get_logger, setup_logging
@@ -17,6 +18,7 @@ from app.workers.enqueue import close_arq
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     setup_logging()
+    init_sentry("api")
     log = get_logger(__name__)
     settings = get_settings()
     log.info("startup", env=settings.env, provider=settings.messaging_provider)

@@ -12,8 +12,10 @@ from __future__ import annotations
 
 from fastapi import APIRouter, Depends, Request
 
+from app.observability.alerts import fire_alert
 from app.providers import MessagingProvider, get_provider
 from app.repos import events as events_repo
+from app.repos.redis_client import get_redis
 from app.utils.logging import get_logger
 from app.workers.enqueue import enqueue_event
 
@@ -69,6 +71,7 @@ async def webhook_receive(
         events = await provider.parse_webhook(raw_body, headers)
     except Exception as exc:
         log.exception("webhook_parse_failed", provider=provider_name, error=str(exc))
+        await _record_parse_failure()
         events = []
 
     log.info(
@@ -97,3 +100,19 @@ async def webhook_receive(
             )
 
     return {"status": "ok"}
+
+
+async def _record_parse_failure() -> None:
+    """Increment parse failure counter; alert if threshold breached."""
+    redis = await get_redis()
+    key = "webhook:parse_failures"
+    count = await redis.incr(key)
+    if count == 1:
+        await redis.expire(key, 3600)  # 1-hour window
+
+    if count >= 10:
+        await fire_alert(
+            "webhook_parse_failures",
+            f"Получено {count} ошибок парсинга webhook за последний час. "
+            f"Возможны проблемы у провайдера или изменения в их API.",
+        )
