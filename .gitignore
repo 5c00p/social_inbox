@@ -29,3 +29,8 @@ Thumbs.db
 # Project
 *.log
 logs/
+
+# Node (for scripts/build_go_live_checklist.js generator)
+node_modules/
+scripts/node_modules/
+scripts/package-lock.json

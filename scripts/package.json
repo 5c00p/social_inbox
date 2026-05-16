@@ -1,0 +1,12 @@
+{
+  "name": "social-inbox-scripts",
+  "version": "1.0.0",
+  "description": "One-off Node.js helpers (DOCX generation, etc.)",
+  "private": true,
+  "scripts": {
+    "build-checklist": "node build_go_live_checklist.js ../docs/Go_Live_Checklist.docx"
+  },
+  "dependencies": {
+    "docx": "^9.5.0"
+  }
+}

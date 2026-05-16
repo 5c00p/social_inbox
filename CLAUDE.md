@@ -5,6 +5,12 @@
 >
 > **Версия 2** (после анализа bot_purify и выбора SendPulse Free + n8n).
 
+## Запуск в production
+
+См. `docs/go_live_runbook.md` для технической процедуры запуска.
+См. `docs/Go_Live_Checklist.docx` для пошаговой инструкции Юле.
+Smoke checks: `make smoke-prod` (требует `PROD_BASE_URL` в окружении).
+
 ---
 
 ## 1. Контекст и цель проекта
@@ -899,7 +905,7 @@ shell:
 | 15 | Admin dashboard (минимальный) | 📋 To do | 2 дня |
 | 16 | Monitoring (Sentry, healthcheck) | 📋 To do | 1 день |
 | 17 | Production deployment + reverse proxy | ✅ Done (2026-05-16) | 1 день |
-| 18 | Smoke tests + go-live | 📋 To do | 0.5 дня |
+| 18 | Smoke tests + go-live | ✅ Done (2026-05-16) | 0.5 дня |
 
 **Итого: ~20 человеко-дней разработки.** При работе по 1.5–2 часа в день — **~3 недели до MVP.**
 
@@ -931,5 +937,5 @@ shell:
 
 ---
 
-**Последнее обновление:** 2026-05-16 (Task 17: production deployment — deploy/ runbook, prod compose overlay, Traefik+ACME, backup scripts)
+**Последнее обновление:** 2026-05-16 (Task 18: smoke tests + go-live — scripts/smoke_test.py, docs/go_live_runbook.md, docs/Go_Live_Checklist.docx, make smoke-local/prod)
 **Поддерживается:** Виктор + Claude
