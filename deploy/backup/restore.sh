@@ -33,11 +33,11 @@ fi
 echo "Stopping api, worker, admin (postgres + redis stay running)..."
 docker compose stop api worker admin
 
-DB_USER=$(grep -E '^POSTGRES_USER=' .env | cut -d= -f2-)
-DB_NAME=$(grep -E '^POSTGRES_DB=' .env | cut -d= -f2-)
+DB_USER=$(grep -E '^POSTGRES_USER=' .env.compose | cut -d= -f2-)
+DB_NAME=$(grep -E '^POSTGRES_DB=' .env.compose | cut -d= -f2-)
 
 if [ -z "$DB_USER" ] || [ -z "$DB_NAME" ]; then
-    echo "ERROR: POSTGRES_USER or POSTGRES_DB missing from .env"
+    echo "ERROR: POSTGRES_USER or POSTGRES_DB missing from .env.compose"
     exit 1
 fi
 
@@ -48,5 +48,5 @@ gunzip -c "$DUMP_FILE" | docker compose exec -T postgres psql \
 echo "Restarting services..."
 docker compose start api worker admin
 
-PUBLIC_HOST_INBOX=$(grep -E '^PUBLIC_HOST_INBOX=' .env | cut -d= -f2-)
+PUBLIC_HOST_INBOX=$(grep -E '^PUBLIC_HOST_INBOX=' .env.compose | cut -d= -f2-)
 echo "Restore complete. Verify via: curl https://${PUBLIC_HOST_INBOX}/ready"

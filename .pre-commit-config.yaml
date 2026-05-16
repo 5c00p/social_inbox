@@ -12,6 +12,8 @@ repos:
       - id: trailing-whitespace
       - id: end-of-file-fixer
       - id: check-yaml
+        # docker compose !override / !reset tags (v2.20+) are not standard YAML
+        exclude: ^deploy/docker-compose\.prod\.yml$
       - id: check-added-large-files
         args: ["--maxkb=500"]
       - id: check-merge-conflict

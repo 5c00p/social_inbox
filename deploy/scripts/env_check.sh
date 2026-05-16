@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Verify .env has all required keys before deploy.
+# Verify .env and .env.compose have all required keys before deploy.
+#
+# .env       → loaded into app containers (validated by pydantic Settings, extra=forbid).
+# .env.compose → compose-level ${VAR} substitution (POSTGRES_*, PUBLIC_HOST_*, TRAEFIK_*).
 
 set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-REQUIRED_KEYS=(
+# Keys expected in .env (declared in app/config.py:Settings).
+APP_KEYS=(
     "ENV"
     "POSTGRES_DSN"
-    "POSTGRES_USER"
-    "POSTGRES_PASSWORD"
-    "POSTGRES_DB"
     "REDIS_URL"
     "MESSAGING_PROVIDER"
     "SENDPULSE_CLIENT_ID"
@@ -23,38 +24,62 @@ REQUIRED_KEYS=(
     "NOTIFICATION_BOT_TOKEN"
     "NOTIFICATION_ADMIN_CHAT_ID"
     "TELEGRAM_BOT_USERNAME"
-    "PUBLIC_HOST_INBOX"
-    "PUBLIC_HOST_ADMIN"
-    "TRAEFIK_ACME_EMAIL"
+    "PUBLIC_BASE_URL"
     "SENTRY_DSN"
 )
 
-if [ ! -f .env ]; then
-    echo "FAIL: .env not found"
+# Keys expected in .env.compose (compose substitution only — NOT into app).
+COMPOSE_KEYS=(
+    "POSTGRES_USER"
+    "POSTGRES_PASSWORD"
+    "POSTGRES_DB"
+    "PUBLIC_HOST_INBOX"
+    "PUBLIC_HOST_ADMIN"
+    "TRAEFIK_ACME_EMAIL"
+)
+
+fail=0
+
+check_file() {
+    local file="$1"
+    shift
+    local required_keys=("$@")
+
+    if [ ! -f "$file" ]; then
+        echo "FAIL: $file not found"
+        fail=1
+        return
+    fi
+
+    local missing=()
+    local empty=()
+    for key in "${required_keys[@]}"; do
+        if ! grep -q "^${key}=" "$file"; then
+            missing+=("$key")
+            continue
+        fi
+        local value
+        value=$(grep "^${key}=" "$file" | cut -d= -f2-)
+        if [ -z "$value" ]; then
+            empty+=("$key")
+        fi
+    done
+
+    if [ ${#missing[@]} -gt 0 ]; then
+        echo "FAIL: missing keys in $file: ${missing[*]}"
+        fail=1
+    fi
+    if [ ${#empty[@]} -gt 0 ]; then
+        # SENTRY_DSN can be empty in dev; in prod it's strongly recommended
+        echo "WARN: empty values in $file: ${empty[*]}"
+    fi
+}
+
+check_file ".env" "${APP_KEYS[@]}"
+check_file ".env.compose" "${COMPOSE_KEYS[@]}"
+
+if [ "$fail" -ne 0 ]; then
     exit 1
 fi
 
-MISSING=()
-EMPTY=()
-for key in "${REQUIRED_KEYS[@]}"; do
-    if ! grep -q "^${key}=" .env; then
-        MISSING+=("$key")
-        continue
-    fi
-    value=$(grep "^${key}=" .env | cut -d= -f2-)
-    if [ -z "$value" ]; then
-        EMPTY+=("$key")
-    fi
-done
-
-if [ ${#MISSING[@]} -gt 0 ]; then
-    echo "FAIL: missing keys in .env: ${MISSING[*]}"
-    exit 1
-fi
-
-if [ ${#EMPTY[@]} -gt 0 ]; then
-    # SENTRY_DSN can be empty in dev; in prod it's strongly recommended
-    echo "WARN: empty values for: ${EMPTY[*]}"
-fi
-
-echo "OK: all required keys present"
+echo "OK: .env + .env.compose have all required keys"

@@ -1,0 +1,49 @@
+# Traefik static configuration.
+# Dynamic config (routes/services) comes from docker labels.
+#
+# Note: ACME email is intentionally NOT set here. It is provided at runtime via
+# the env var TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL, which
+# docker-compose.prod.yml derives from TRAEFIK_ACME_EMAIL in .env.
+# This keeps the email out of the repo while preserving the rest of the config.
+
+global:
+  checkNewVersion: false
+  sendAnonymousUsage: false
+
+api:
+  dashboard: false
+  insecure: false
+
+entryPoints:
+  web:
+    address: ":80"
+    http:
+      redirections:
+        entryPoint:
+          to: websecure
+          scheme: https
+          permanent: true
+  websecure:
+    address: ":443"
+
+providers:
+  docker:
+    endpoint: "unix:///var/run/docker.sock"
+    exposedByDefault: false
+    network: purify-shared
+
+certificatesResolvers:
+  letsencrypt:
+    acme:
+      storage: /acme.json
+      tlsChallenge: {}
+
+log:
+  level: INFO
+  format: json
+
+accessLog:
+  format: json
+  filters:
+    statusCodes:
+      - "400-599"

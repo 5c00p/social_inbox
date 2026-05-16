@@ -1,0 +1,5 @@
+# social_inbox backup schedule.
+# Install: sudo crontab -u <deploy_user> -e   then paste these lines.
+
+# Daily backup at 03:00 UTC (off-hours for IG audience in EU/Asia)
+0 3 * * * /opt/social_inbox/deploy/backup/backup.sh >> /var/log/social_inbox_backup.log 2>&1

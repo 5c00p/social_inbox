@@ -6,10 +6,15 @@ set -euo pipefail
 
 cd "$(dirname "$0")/../.."
 
-# Load env so we can reference PUBLIC_HOST_*
+# PUBLIC_HOST_* live in .env.compose (compose substitution vars, NOT in app .env)
+if [ ! -f .env.compose ]; then
+    echo "FAIL: .env.compose not found"
+    exit 1
+fi
+
 set -a
 # shellcheck disable=SC1091
-source .env
+source .env.compose
 set +a
 
 PUBLIC_INBOX="https://${PUBLIC_HOST_INBOX}"

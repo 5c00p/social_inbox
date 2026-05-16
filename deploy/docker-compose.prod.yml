@@ -1,0 +1,106 @@
+# Production overrides for social_inbox.
+#
+# Usage:
+#   docker compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d
+#
+# Differences from base docker-compose.yml:
+# - No source mount volumes (containers run baked image)
+# - Traefik labels for routing
+# - Logging rotation
+# - Connected to external 'purify-shared' network for bot_purify access
+# - No exposed ports for api/admin/postgres/redis (only via Traefik)
+# - api gets 'social-inbox-api' network alias so bot_purify can reach it
+#
+# Requires docker compose v2.20+ (uses !override / !reset tags to clear base
+# sequences like ports / volumes that would otherwise be concatenated).
+
+services:
+  api:
+    restart: always
+    volumes: !override []
+    ports: !override []
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.api.rule=Host(`${PUBLIC_HOST_INBOX}`)"
+      - "traefik.http.routers.api.entrypoints=websecure"
+      - "traefik.http.routers.api.tls.certresolver=letsencrypt"
+      - "traefik.http.services.api.loadbalancer.server.port=8000"
+    networks:
+      default:
+        aliases:
+          - social-inbox-api
+
+  worker:
+    restart: always
+    volumes: !override []
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    labels:
+      - "traefik.enable=false"
+
+  admin:
+    restart: always
+    volumes: !override []
+    ports: !override []
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.admin.rule=Host(`${PUBLIC_HOST_ADMIN}`)"
+      - "traefik.http.routers.admin.entrypoints=websecure"
+      - "traefik.http.routers.admin.tls.certresolver=letsencrypt"
+      - "traefik.http.services.admin.loadbalancer.server.port=8501"
+
+  postgres:
+    restart: always
+    ports: !override []
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    restart: always
+    ports: !override []
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  traefik:
+    image: traefik:v3.2
+    restart: always
+    ports:
+      - "80:80"
+      - "443:443"
+    environment:
+      TRAEFIK_CERTIFICATESRESOLVERS_LETSENCRYPT_ACME_EMAIL: ${TRAEFIK_ACME_EMAIL}
+    volumes:
+      - ./deploy/traefik/traefik.yml:/etc/traefik/traefik.yml:ro
+      - ./deploy/traefik/acme.json:/acme.json
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - default
+
+networks:
+  default:
+    name: purify-shared
+    external: true

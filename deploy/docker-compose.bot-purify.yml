@@ -1,0 +1,19 @@
+# Example overlay for bot_purify project to connect to social_inbox network.
+#
+# Place this file in /opt/bot_purify/ (or wherever bot_purify lives).
+# Use as:
+#   docker compose -f docker-compose.yml -f docker-compose.bot-purify.yml up -d
+#
+# This DOES NOT replace bot_purify's own compose; it adds the shared network
+# so bot_purify can reach social_inbox via http://social-inbox-api:8000
+
+services:
+  bot:
+    networks:
+      - default
+      - purify-shared
+
+networks:
+  purify-shared:
+    name: purify-shared
+    external: true

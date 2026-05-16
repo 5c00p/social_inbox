@@ -28,11 +28,11 @@ WEEKLY_FILE="$BACKUP_DIR/weekly/social_inbox-$DATE.sql.gz"
 # --- Dump ---
 cd "$PROJECT_DIR"
 
-DB_USER=$(grep -E '^POSTGRES_USER=' .env | cut -d= -f2-)
-DB_NAME=$(grep -E '^POSTGRES_DB=' .env | cut -d= -f2-)
+DB_USER=$(grep -E '^POSTGRES_USER=' .env.compose | cut -d= -f2-)
+DB_NAME=$(grep -E '^POSTGRES_DB=' .env.compose | cut -d= -f2-)
 
 if [ -z "$DB_USER" ] || [ -z "$DB_NAME" ]; then
-    echo "ERROR: POSTGRES_USER or POSTGRES_DB missing from .env"
+    echo "ERROR: POSTGRES_USER or POSTGRES_DB missing from .env.compose"
     exit 1
 fi
 

@@ -785,6 +785,27 @@ Traefik или nginx (в зависимости от того, что у теб�
 4. Мониторить 3-5 дней
 5. Расширять на остальной контент
 
+### 14.7. Production runbook
+
+Подробное руководство по развёртыванию, обновлению, бэкапам и восстановлению:
+`deploy/README.md`.
+
+Ключевые команды:
+- Deploy новой версии: `cd /opt/social_inbox && ./deploy/scripts/deploy.sh`
+- Smoke check: `./deploy/scripts/smoke_check.sh`
+- Env check: `./deploy/scripts/env_check.sh`
+- Backup: `./deploy/backup/backup.sh`
+- Restore: `./deploy/backup/restore.sh <dump.sql.gz>`
+
+Production overlay:
+`docker compose --env-file .env.compose -f docker-compose.yml -f deploy/docker-compose.prod.yml up -d`.
+Требует docker compose v2.20+ (для `!override` тегов, очищающих base sequences).
+
+Прод использует **два** env-файла, чтобы не конфликтовать с `Settings(extra="forbid")`:
+- `.env` — app-переменные, загружаются в api/admin/worker через `env_file: .env`
+- `.env.compose` — compose-substitution vars (POSTGRES_USER/PASSWORD/DB,
+  PUBLIC_HOST_*, TRAEFIK_ACME_EMAIL), передаётся через `--env-file .env.compose`.
+
 ---
 
 ## 15. Работа с задачами
@@ -877,7 +898,7 @@ shell:
 | 14 | Safety filters + human agent escalation | 📋 To do | 1 день |
 | 15 | Admin dashboard (минимальный) | 📋 To do | 2 дня |
 | 16 | Monitoring (Sentry, healthcheck) | 📋 To do | 1 день |
-| 17 | Production deployment + reverse proxy | 📋 To do | 1 день |
+| 17 | Production deployment + reverse proxy | ✅ Done (2026-05-16) | 1 день |
 | 18 | Smoke tests + go-live | 📋 To do | 0.5 дня |
 
 **Итого: ~20 человеко-дней разработки.** При работе по 1.5–2 часа в день — **~3 недели до MVP.**
@@ -910,5 +931,5 @@ shell:
 
 ---
 
-**Последнее обновление:** 2026-05-02 (v3 — Task 04: MessagingProvider interface)
+**Последнее обновление:** 2026-05-16 (Task 17: production deployment — deploy/ runbook, prod compose overlay, Traefik+ACME, backup scripts)
 **Поддерживается:** Виктор + Claude

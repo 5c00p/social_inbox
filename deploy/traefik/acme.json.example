@@ -1,0 +1,2 @@
+# This file is auto-created by Traefik on first start.
+# On the VPS: touch acme.json && chmod 600 acme.json BEFORE first compose up.
