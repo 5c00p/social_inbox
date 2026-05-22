@@ -37,6 +37,12 @@ class Settings(BaseSettings):
     sendpulse_client_secret: str = ""
     sendpulse_webhook_secret: str = ""
 
+    # --- SendPulse polling (Free tier workaround for webhook absence) ---
+    sendpulse_polling_enabled: bool = True
+    sendpulse_polling_interval_seconds: int = 30
+    sendpulse_bot_id: str = ""
+    sendpulse_api_base: str = "https://api.sendpulse.com"
+
     # --- Anthropic ---
     anthropic_api_key: str = ""
     claude_default_model: str = "claude-sonnet-4-6"

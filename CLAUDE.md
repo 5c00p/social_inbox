@@ -344,6 +344,22 @@ D:\Work\social_inbox\
 
 **При смене SendPulse → Manychat:** пишется `app/providers/manychat.py`, в `app/config.py` меняется `MESSAGING_PROVIDER=manychat`, в DI поднимается другой класс. Логика сценариев не меняется.
 
+### 7.3. SendPulse — polling vs webhook
+
+SendPulse webhooks доступны только в платных тарифах. До апгрейда работаем
+на polling-режиме:
+
+- Worker раз в 30 сек дёргает `GET /instagram/messages` и `GET /instagram/comments`
+- Новые события приходят с задержкой до 30 секунд (приемлемо для воронки)
+- Cursor хранится в Redis (`sendpulse:cursor:<bot_id>`)
+- Дедупликация через `events_log.external_event_id` UNIQUE
+- При апгрейде тарифа: `SENDPULSE_POLLING_ENABLED=false` + restart worker
+
+См. `app/providers/sendpulse.py:poll_new_events` и `app/workers/tasks_sendpulse.py`.
+
+При смене провайдера (Manychat / Meta direct) → меняется один файл провайдера,
+polling-логика SendPulse-specific и в новом провайдере не нужна.
+
 ---
 
 ## 8. Схема БД
