@@ -14,6 +14,7 @@ Future limits (not in this task — see CLAUDE.md §12.4):
 - 1 comment-to-DM per (user, scenario) per 30 days
 These will be implemented in Tasks 08/09 with their own keys.
 """
+
 from __future__ import annotations
 
 from app.repos.redis_client import get_redis
@@ -55,7 +56,9 @@ async def can_reply(user_id: int) -> bool:
     """
     key = f"rl:reply:{user_id}"
     allowed = await check_and_increment(
-        key, REPLIES_PER_MINUTE_LIMIT, REPLIES_PER_MINUTE_WINDOW,
+        key,
+        REPLIES_PER_MINUTE_LIMIT,
+        REPLIES_PER_MINUTE_WINDOW,
     )
     if not allowed:
         log.warning("rate_limit_hit_replies_per_minute", user_id=user_id)
@@ -70,8 +73,29 @@ async def can_reply_daily(user_id: int) -> bool:
     """
     key = f"rl:reply:day:{user_id}"
     allowed = await check_and_increment(
-        key, REPLIES_PER_DAY_LIMIT, REPLIES_PER_DAY_WINDOW,
+        key,
+        REPLIES_PER_DAY_LIMIT,
+        REPLIES_PER_DAY_WINDOW,
     )
     if not allowed:
         log.warning("rate_limit_hit_replies_per_day", user_id=user_id)
     return allowed
+
+
+# --- Internal API rate limit (Task 11) ---
+
+API_REQUESTS_PER_MINUTE = 60
+API_WINDOW_SECONDS = 60
+
+
+async def can_call_internal_api(token_fingerprint: str) -> bool:
+    """Returns True if internal API caller is within rate limit.
+
+    Token is hashed before use as Redis key (don't put secrets in keys).
+    """
+    key = f"rl:api:{token_fingerprint}"
+    return await check_and_increment(
+        key,
+        API_REQUESTS_PER_MINUTE,
+        API_WINDOW_SECONDS,
+    )

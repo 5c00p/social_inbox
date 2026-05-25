@@ -1,4 +1,5 @@
 """FastAPI application entry point."""
+
 from __future__ import annotations
 
 from collections.abc import AsyncIterator
@@ -6,7 +7,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 
-from app.api import health, webhooks
+from app.api import health, lead, webhooks
 from app.config import get_settings
 from app.observability.sentry import init_sentry
 from app.repos.pool import close_pool, run_migrations
@@ -42,6 +43,7 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(webhooks.router)
+    app.include_router(lead.router)
     return app
 
 

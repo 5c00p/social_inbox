@@ -3,6 +3,7 @@
 Style: raw SQL via asyncpg (matches bot_purify), no ORM.
 All queries respect soft-delete (filter deleted_at IS NULL by default).
 """
+
 from __future__ import annotations
 
 from datetime import datetime
@@ -30,7 +31,9 @@ async def get_by_external(
           AND external_id = $3
           AND deleted_at IS NULL
         """,
-        provider_name, platform, external_id,
+        provider_name,
+        platform,
+        external_id,
     )
 
 
@@ -75,9 +78,14 @@ async def create(
         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
         RETURNING *
         """,
-        provider_name, platform, external_id,
-        username, full_name, profile_pic_url,
-        short_id, metadata or {},
+        provider_name,
+        platform,
+        external_id,
+        username,
+        full_name,
+        profile_pic_url,
+        short_id,
+        metadata or {},
     )
 
 
@@ -86,7 +94,8 @@ async def update_last_message_at(user_id: int, ts: datetime) -> None:
     pool = await get_pool()
     await pool.execute(
         "UPDATE social_users SET last_message_at = $2 WHERE id = $1",
-        user_id, ts,
+        user_id,
+        ts,
     )
 
 
@@ -99,7 +108,9 @@ async def mark_handover(user_id: int, tg_user_id: int, ts: datetime) -> None:
         SET tg_handover_at = $2, tg_user_id = $3
         WHERE id = $1
         """,
-        user_id, ts, tg_user_id,
+        user_id,
+        ts,
+        tg_user_id,
     )
 
 
@@ -108,5 +119,31 @@ async def soft_delete(user_id: int, ts: datetime) -> None:
     pool = await get_pool()
     await pool.execute(
         "UPDATE social_users SET deleted_at = $2 WHERE id = $1",
-        user_id, ts,
+        user_id,
+        ts,
+    )
+
+
+async def get_last_outgoing_with_scenario(user_id: int) -> asyncpg.Record | None:
+    """Return the most recent OUT message together with its scenario metadata.
+
+    Used by /api/lead/{short_id} to determine which scenario_slug brought
+    the user to Telegram (the deep-link in this message contains it).
+    """
+    pool = await get_pool()
+    return await pool.fetchrow(
+        """
+        SELECT m.id AS message_id,
+               m.created_at,
+               s.metadata AS scenario_metadata,
+               s.name AS scenario_name
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversation_id
+        LEFT JOIN scenarios s ON s.id = m.scenario_id
+        WHERE c.user_id = $1
+          AND m.direction = 'out'
+        ORDER BY m.created_at DESC
+        LIMIT 1
+        """,
+        user_id,
     )
