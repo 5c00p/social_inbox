@@ -1,15 +1,17 @@
 """SendPulse REST API client.
 
-Handles:
+Wraps the SendPulse Instagram Chatbot API. Endpoints match the official
+OpenAPI spec at https://sendpulse.com/swagger/instagram/.
+
+Responsibilities:
 - OAuth2 client_credentials flow with token caching in Redis
 - HTTP retries on transient errors (5xx, 429)
 - Graceful 401 handling (refresh token and retry once)
-- No retries on 403 (Free tier limitation — wastes API quota)
+- Typed methods for the endpoints we actually use: list_chats,
+  list_chat_messages, send_message, get_contact
 
 Does NOT contain provider-level logic (event parsing, cursor management).
 That stays in app/providers/sendpulse.py.
-
-Docs: https://sendpulse.com/integrations/api/chatbot/instagram
 """
 
 from __future__ import annotations
@@ -35,10 +37,11 @@ class SendPulseAuthError(Exception):
 class SendPulseAPIError(Exception):
     """Non-2xx response after retries."""
 
-    def __init__(self, status: int, body: str) -> None:
+    def __init__(self, status: int, body: str, *, path: str = "") -> None:
         self.status = status
         self.body = body
-        super().__init__(f"SendPulse API error {status}: {body[:200]}")
+        self.path = path
+        super().__init__(f"SendPulse API error {status} on {path}: {body[:200]}")
 
 
 class SendPulseClient:
@@ -59,7 +62,6 @@ class SendPulseClient:
     # ---- Auth ----
 
     async def _fetch_new_token(self) -> str:
-        """Request a new OAuth access token from SendPulse."""
         async with httpx.AsyncClient(timeout=self._timeout) as client:
             response = await client.post(
                 f"{self._base_url}/oauth/access_token",
@@ -80,19 +82,17 @@ class SendPulseClient:
         return str(token)
 
     async def _get_token(self, force_refresh: bool = False) -> str:
-        """Return cached token or fetch a new one."""
         redis = await get_redis()
         if not force_refresh:
             cached = await redis.get(TOKEN_REDIS_KEY)
             if cached:
                 return str(cached)
-
         token = await self._fetch_new_token()
         await redis.set(TOKEN_REDIS_KEY, token, ex=TOKEN_TTL_SECONDS)
         log.info("sendpulse_token_refreshed")
         return token
 
-    # ---- HTTP wrapper ----
+    # ---- Generic request wrapper ----
 
     async def request(
         self,
@@ -102,15 +102,14 @@ class SendPulseClient:
         params: dict[str, Any] | None = None,
         json: dict[str, Any] | None = None,
         max_retries: int = 3,
+        absolute_url: str | None = None,
     ) -> dict[str, Any]:
-        """Perform an authenticated API request with retries on transient errors.
+        """Perform an authenticated API request with retries.
 
-        Returns parsed JSON body on 2xx. Raises SendPulseAPIError otherwise.
-        On 401: refreshes token once and retries.
-        On 5xx / 429: exponential backoff up to max_retries.
-        On 403: raises immediately (likely Free tier limitation — don't retry).
+        Either `path` (relative) or `absolute_url` (full URL, used for pagination
+        via links.next) must be provided.
         """
-        url = f"{self._base_url}{path}"
+        url = absolute_url or f"{self._base_url}{path}"
         token_refreshed = False
 
         for attempt in range(max_retries + 1):
@@ -132,30 +131,88 @@ class SendPulseClient:
                 parsed = response.json()
                 if isinstance(parsed, dict):
                     return parsed
-                # Some endpoints return arrays at the top level; wrap so callers
-                # can rely on dict access.
                 return {"data": parsed}
 
             if response.status_code == 401 and not token_refreshed:
-                log.warning("sendpulse_401_refreshing_token")
+                log.warning("sendpulse_401_refreshing_token", path=path)
                 await self._get_token(force_refresh=True)
                 token_refreshed = True
                 continue
 
             if response.status_code == 403:
-                raise SendPulseAPIError(403, response.text)
+                raise SendPulseAPIError(403, response.text, path=path)
 
             if response.status_code in (429, 500, 502, 503, 504) and attempt < max_retries:
                 backoff = 2**attempt
                 log.warning(
                     "sendpulse_transient_error_retrying",
                     status=response.status_code,
+                    path=path,
                     attempt=attempt + 1,
                     backoff=backoff,
                 )
                 await asyncio.sleep(backoff)
                 continue
 
-            raise SendPulseAPIError(response.status_code, response.text)
+            raise SendPulseAPIError(response.status_code, response.text, path=path)
 
-        raise SendPulseAPIError(0, f"exhausted {max_retries} retries")
+        raise SendPulseAPIError(0, f"exhausted {max_retries} retries", path=path)
+
+    # ---- Typed endpoints ----
+
+    async def list_chats(
+        self,
+        bot_id: str,
+        *,
+        size: int = 50,
+        skip: int = 0,
+    ) -> dict[str, Any]:
+        """GET /instagram/chats — list chats with subscribers."""
+        return await self.request(
+            "GET",
+            "/instagram/chats",
+            params={"bot_id": bot_id, "size": size, "skip": skip},
+        )
+
+    async def list_chats_next(self, next_url: str) -> dict[str, Any]:
+        """Continue pagination using a links.next URL from a previous response."""
+        return await self.request("GET", "", absolute_url=next_url)
+
+    async def list_chat_messages(
+        self,
+        contact_id: str,
+        *,
+        size: int = 20,
+        order: str = "desc",
+    ) -> dict[str, Any]:
+        """GET /instagram/chats/messages — messages for a specific contact.
+
+        Used for deep context fetch when Claude needs more history than what's
+        in our DB. Not used in polling — polling reads only the last message
+        from /chats.
+        """
+        return await self.request(
+            "GET",
+            "/instagram/chats/messages",
+            params={"contact_id": contact_id, "size": size, "order": order},
+        )
+
+    async def send_message(
+        self,
+        contact_id: str,
+        messages: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """POST /instagram/contacts/send — send DM to a contact."""
+        return await self.request(
+            "POST",
+            "/instagram/contacts/send",
+            json={"contact_id": contact_id, "messages": messages},
+        )
+
+    async def get_contact(self, contact_id: str) -> dict[str, Any]:
+        """GET /instagram/contacts/get — get contact info by ID."""
+        return await self.request(
+            "GET",
+            "/instagram/contacts/get",
+            params={"id": contact_id},
+        )

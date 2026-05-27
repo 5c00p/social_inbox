@@ -344,21 +344,39 @@ D:\Work\social_inbox\
 
 **При смене SendPulse → Manychat:** пишется `app/providers/manychat.py`, в `app/config.py` меняется `MESSAGING_PROVIDER=manychat`, в DI поднимается другой класс. Логика сценариев не меняется.
 
-### 7.3. SendPulse — polling vs webhook
+### 7.3. SendPulse — polling vs webhook + hybrid acquisition
 
 SendPulse webhooks доступны только в платных тарифах. До апгрейда работаем
-на polling-режиме:
+на polling-режиме через **реальные endpoint'ы** (а не угаданные в Task 05 v1):
 
-- Worker раз в 30 сек дёргает `GET /instagram/messages` и `GET /instagram/comments`
-- Новые события приходят с задержкой до 30 секунд (приемлемо для воронки)
-- Cursor хранится в Redis (`sendpulse:cursor:<bot_id>`)
+- Worker раз в 30 сек дёргает `GET /instagram/chats?bot_id=X&size=50`
+- Для каждого чата читает `inbox_last_message`; фильтрует direction=1 + is_echo=false
+- Поддерживаемые типы: `text`, `reply_to_story` (остальные skip + log)
+- Cursor — глобальный по времени, в Redis (`sendpulse:cursor:<bot_id>`)
 - Дедупликация через `events_log.external_event_id` UNIQUE
+- На холодном старте cursor = `NOW()` (без backfill истории — защита от bulk processing)
+- Пагинация через `links.next`, max 5 страниц за один tick
 - При апгрейде тарифа: `SENDPULSE_POLLING_ENABLED=false` + restart worker
 
-См. `app/providers/sendpulse.py:poll_new_events` и `app/workers/tasks_sendpulse.py`.
+**Comments acquisition недоступен через API на любом тарифе SendPulse.**
+SendPulse не отдаёт comments из IG-постов через REST. Comments через API
+есть только на платном тарифе через webhook от Meta (в обход SendPulse).
 
-При смене провайдера (Manychat / Meta direct) → меняется один файл провайдера,
-polling-логика SendPulse-specific и в новом провайдере не нужна.
+**Hybrid acquisition strategy:**
+
+- **Comment-to-DM** обрабатывается ВНУТРИ SendPulse Flow Builder (UI):
+  - Trigger по keyword «ОЧИЩЕНИЕ» под Reels-комментариями
+  - Flow отправляет DM с deep-link в Telegram
+  - Настройка — см. `docs/SendPulse_Flow_Setup.docx` (для Юли)
+- **DM-acquisition + smart replies + handover** работают через наш polling
+
+При смене провайдера (Manychat / Meta direct) → SendPulse-specific код
+(polling, cursor) удаляется, новый провайдер использует webhook.
+
+См. `app/providers/sendpulse.py:poll_new_events`,
+`app/providers/sendpulse_client.py:list_chats`.
+
+OpenAPI спецификация SendPulse: <https://sendpulse.com/swagger/instagram/>
 
 ---
 

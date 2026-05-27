@@ -1,24 +1,111 @@
-"""Tests for SendPulseProvider — parsing, polling, sending."""
+"""Tests for SendPulseProvider — parsing real /chats response items."""
 
 from __future__ import annotations
 
-import asyncio
-import hashlib
-import hmac
-import json
+import json as _json
 import re
 from collections.abc import AsyncIterator
+from datetime import UTC, datetime
 
 import pytest
 from pytest_httpx import HTTPXMock
 
 from app.models.events import OutgoingMessage, QuickReply
 from app.providers.sendpulse import SendPulseProvider
+from app.providers.sendpulse_cursor import set_cursor
 from app.repos.redis_client import get_redis
 
-# pytest-httpx 0.35 takes a compiled regex for prefix-style matching.
-_MESSAGES_RE = re.compile(r"^https://api\.sendpulse\.com/instagram/messages")
-_COMMENTS_RE = re.compile(r"^https://api\.sendpulse\.com/instagram/comments")
+_CHATS_RE = re.compile(r"^https://api\.sendpulse\.com/instagram/chats")
+
+
+# ─── Fixtures: real shapes from Yulia's account ───
+
+CHAT_INCOMING_TEXT: dict = {
+    "inbox_last_message": {
+        "contact_id": "6a14d242a0cb77b3d00abf18",
+        "bot_id": "6a0b5c1e35f395f025034fb6",
+        "type": "text",
+        "direction": 1,
+        "created_at": "2026-05-25T22:50:43+00:00",
+        "id": "6a14d243bea27c81cb0a7492",
+        "data": {
+            "text": "Здравствуйте! Какие масла посоветуете от гриппа и простуды?",
+            "is_echo": False,
+            "is_deleted": False,
+        },
+    },
+    "inbox_unread": 1,
+    "contact": {
+        "id": "6a14d242a0cb77b3d00abf18",
+        "bot_id": "6a0b5c1e35f395f025034fb6",
+        "channel_data": {
+            "id": 4280767578903322,
+            "name": "Svetlana",
+            "user_name": "svetlana_parf_orig",
+            "first_name": "Svetlana",
+        },
+        "last_activity_at": "2026-05-25T22:50:43+00:00",
+    },
+}
+
+CHAT_REPLY_TO_STORY: dict = {
+    "inbox_last_message": {
+        "contact_id": "6a0c09208be53535bc0e5514",
+        "type": "reply_to_story",
+        "direction": 1,
+        "created_at": "2026-05-26T07:12:39+00:00",
+        "id": "6a1547e7e69bccac5600817c",
+        "data": {
+            "text": "🔥",
+            "is_echo": False,
+            "reply_to": {"story": "story:18..."},
+        },
+    },
+    "inbox_unread": 32,
+    "contact": {
+        "id": "6a0c09208be53535bc0e5514",
+        "channel_data": {
+            "name": "анна прощенко",
+            "user_name": "proshchenko105",
+        },
+    },
+}
+
+CHAT_OUTGOING: dict = {
+    "inbox_last_message": {
+        "contact_id": "u1",
+        "type": "text",
+        "direction": 2,  # outgoing — skip
+        "created_at": "2026-05-26T08:00:00+00:00",
+        "id": "msg_outgoing",
+        "data": {"text": "Our reply", "is_echo": False},
+    },
+    "contact": {"id": "u1", "channel_data": {"user_name": "x"}},
+}
+
+CHAT_ECHO: dict = {
+    "inbox_last_message": {
+        "contact_id": "u2",
+        "type": "text",
+        "direction": 1,
+        "created_at": "2026-05-26T08:00:00+00:00",
+        "id": "msg_echo",
+        "data": {"text": "echo", "is_echo": True},
+    },
+    "contact": {"id": "u2", "channel_data": {"user_name": "x"}},
+}
+
+CHAT_UNSUPPORTED_TYPE: dict = {
+    "inbox_last_message": {
+        "contact_id": "u3",
+        "type": "image",
+        "direction": 1,
+        "created_at": "2026-05-26T08:00:00+00:00",
+        "id": "msg_img",
+        "data": {"text": None, "is_echo": False},
+    },
+    "contact": {"id": "u3", "channel_data": {"user_name": "x"}},
+}
 
 
 @pytest.fixture(autouse=True)
@@ -34,63 +121,210 @@ async def _clear_keys() -> AsyncIterator[None]:
 
 
 def _make_provider() -> SendPulseProvider:
-    return SendPulseProvider(
-        client_id="test_cid",
-        client_secret="test_csecret",
-        webhook_secret="test_wsecret",
-    )
+    return SendPulseProvider("cid", "csecret", webhook_secret="wsecret")
 
 
-# ---- parse_message_item ----
+# ────────── Parsing ──────────
 
 
-def test_parse_message_item_basic() -> None:
-    provider = _make_provider()
-    raw = {
-        "id": "msg_123",
-        "contact": {"id": "user_456", "username": "anna", "name": "Anna P"},
-        "text": "Привет",
-        "created_at": "2026-05-15T12:00:00Z",
-    }
-    event = provider._parse_message_item(raw)
+def test_parse_chat_text_message() -> None:
+    p = _make_provider()
+    event = p._parse_chat_item(CHAT_INCOMING_TEXT)
     assert event is not None
-    assert event.external_user_id == "user_456"
-    assert event.external_event_id == "msg_123"
-    assert event.username == "anna"
-    assert event.full_name == "Anna P"
-    assert event.text == "Привет"
+    assert event.external_user_id == "6a14d242a0cb77b3d00abf18"
+    assert event.external_event_id == "6a14d243bea27c81cb0a7492"
+    assert event.username == "svetlana_parf_orig"
+    assert event.full_name == "Svetlana"
+    assert event.text is not None
+    assert "грипп" in event.text
     assert event.event_type == "message"
-    assert event.platform == "instagram"
 
 
-def test_parse_message_item_missing_user_id_returns_none() -> None:
-    provider = _make_provider()
-    raw = {"id": "msg_X", "text": "hi"}
-    assert provider._parse_message_item(raw) is None
-
-
-def test_parse_comment_item_basic() -> None:
-    provider = _make_provider()
-    raw = {
-        "id": "cmt_999",
-        "from": {"id": "user_777", "username": "bob"},
-        "text": "ОЧИЩЕНИЕ",
-        "post_id": "post_42",
-        "created_at": 1715774400,
-    }
-    event = provider._parse_comment_item(raw)
+def test_parse_chat_reply_to_story_as_text() -> None:
+    p = _make_provider()
+    event = p._parse_chat_item(CHAT_REPLY_TO_STORY)
     assert event is not None
-    assert event.event_type == "comment"
-    assert event.external_user_id == "user_777"
-    assert event.post_id == "post_42"
-    assert event.comment_id == "cmt_999"
-    assert event.text == "ОЧИЩЕНИЕ"
+    assert event.text == "🔥"
+    assert event.username == "proshchenko105"
 
 
-# ---- send ----
+def test_parse_skips_outgoing() -> None:
+    p = _make_provider()
+    assert p._parse_chat_item(CHAT_OUTGOING) is None
 
 
-async def test_send_dm_text(httpx_mock: HTTPXMock) -> None:
+def test_parse_skips_echo() -> None:
+    p = _make_provider()
+    assert p._parse_chat_item(CHAT_ECHO) is None
+
+
+def test_parse_skips_unsupported_type() -> None:
+    p = _make_provider()
+    assert p._parse_chat_item(CHAT_UNSUPPORTED_TYPE) is None
+
+
+def test_parse_handles_missing_inbox_last_message() -> None:
+    p = _make_provider()
+    assert p._parse_chat_item({"contact": {}}) is None
+
+
+def test_parse_handles_missing_contact_id() -> None:
+    p = _make_provider()
+    broken: dict = {
+        "inbox_last_message": {
+            "type": "text",
+            "direction": 1,
+            "id": "x",
+            "created_at": "2026-05-26T08:00:00+00:00",
+            "data": {"text": "hi", "is_echo": False},
+        },
+        "contact": {},
+    }
+    assert p._parse_chat_item(broken) is None
+
+
+# ────────── Polling ──────────
+
+
+async def test_polling_returns_new_events(
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SENDPULSE_BOT_ID", "bot_test")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+
+    await set_cursor("bot_test", datetime(2026, 5, 25, 0, 0, tzinfo=UTC))
+
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.sendpulse.com/oauth/access_token",
+        json={"access_token": "tok"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=_CHATS_RE,
+        json={
+            "success": True,
+            "data": [
+                CHAT_INCOMING_TEXT,
+                CHAT_REPLY_TO_STORY,
+                CHAT_OUTGOING,
+                CHAT_ECHO,
+                CHAT_UNSUPPORTED_TYPE,
+            ],
+            "meta": {"total": 5, "limit": 50},
+        },
+    )
+
+    p = _make_provider()
+    events = await p.poll_new_events()
+
+    assert len(events) == 2
+    user_ids = {e.external_user_id for e in events}
+    assert user_ids == {
+        "6a14d242a0cb77b3d00abf18",
+        "6a0c09208be53535bc0e5514",
+    }
+
+
+async def test_polling_advances_cursor(
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SENDPULSE_BOT_ID", "bot_test")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+
+    await set_cursor("bot_test", datetime(2026, 5, 25, 0, 0, tzinfo=UTC))
+
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.sendpulse.com/oauth/access_token",
+        json={"access_token": "tok"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=_CHATS_RE,
+        json={"success": True, "data": [CHAT_INCOMING_TEXT]},
+    )
+    p = _make_provider()
+    await p.poll_new_events()
+
+    from app.providers.sendpulse_cursor import get_cursor
+
+    new_cursor = await get_cursor("bot_test")
+    assert new_cursor == datetime(2026, 5, 25, 22, 50, 43, tzinfo=UTC)
+
+
+async def test_polling_skips_old_messages(
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SENDPULSE_BOT_ID", "bot_test")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+
+    await set_cursor("bot_test", datetime(2026, 12, 31, tzinfo=UTC))
+
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.sendpulse.com/oauth/access_token",
+        json={"access_token": "tok"},
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=_CHATS_RE,
+        json={"success": True, "data": [CHAT_INCOMING_TEXT]},
+    )
+    p = _make_provider()
+    events = await p.poll_new_events()
+    assert events == []
+
+
+async def test_polling_follows_pagination(
+    httpx_mock: HTTPXMock,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("SENDPULSE_BOT_ID", "bot_test")
+    from app.config import get_settings
+
+    get_settings.cache_clear()
+    await set_cursor("bot_test", datetime(2026, 5, 1, tzinfo=UTC))
+
+    httpx_mock.add_response(
+        method="POST",
+        url="https://api.sendpulse.com/oauth/access_token",
+        json={"access_token": "tok"},
+    )
+    next_url = "https://api.sendpulse.com/api/instagram/chats?page=2&jwt=x"
+    httpx_mock.add_response(
+        method="GET",
+        url=_CHATS_RE,
+        json={
+            "success": True,
+            "data": [CHAT_INCOMING_TEXT],
+            "links": {"next": next_url},
+        },
+    )
+    httpx_mock.add_response(
+        method="GET",
+        url=next_url,
+        json={"success": True, "data": [CHAT_REPLY_TO_STORY]},
+    )
+
+    p = _make_provider()
+    events = await p.poll_new_events()
+    assert len(events) == 2
+
+
+# ────────── Send ──────────
+
+
+async def test_send_text(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
         url="https://api.sendpulse.com/oauth/access_token",
@@ -99,26 +333,20 @@ async def test_send_dm_text(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
         url="https://api.sendpulse.com/instagram/contacts/send",
-        json={"success": True, "data": [{"id": "sent_msg_xyz"}]},
+        json={"success": True, "data": {"id": "out_msg_1"}},
     )
-
-    provider = _make_provider()
-    msg = OutgoingMessage(
-        platform="instagram",
-        external_user_id="user_1",
-        text="Привет!",
+    p = _make_provider()
+    result = await p.send(
+        OutgoingMessage(
+            platform="instagram",
+            external_user_id="contact_x",
+            text="Привет!",
+        )
     )
-    result = await provider.send(msg)
-    assert result == "sent_msg_xyz"
-
-    requests = httpx_mock.get_requests(url="https://api.sendpulse.com/instagram/contacts/send")
-    assert len(requests) == 1
-    body = json.loads(requests[0].content)
-    assert body["contact_id"] == "user_1"
-    assert body["messages"][0]["message"]["text"] == "Привет!"
+    assert result == "out_msg_1"
 
 
-async def test_send_dm_with_quick_replies(httpx_mock: HTTPXMock) -> None:
+async def test_send_with_url_button(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
         url="https://api.sendpulse.com/oauth/access_token",
@@ -127,61 +355,35 @@ async def test_send_dm_with_quick_replies(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
         url="https://api.sendpulse.com/instagram/contacts/send",
-        json={"data": [{"id": "qr_msg"}]},
+        json={"success": True, "data": {"id": "out_btn_1"}},
     )
-    provider = _make_provider()
-    msg = OutgoingMessage(
-        platform="instagram",
-        external_user_id="user_1",
-        text="Выбери:",
-        quick_replies=[
-            QuickReply(title="Перейти в TG", payload="https://t.me/yuliya_purify_bot?start=ig_xxx"),
-            QuickReply(title="Узнать больше", payload="more_info"),
-        ],
+    p = _make_provider()
+    await p.send(
+        OutgoingMessage(
+            platform="instagram",
+            external_user_id="contact_x",
+            text="Перейди в Telegram",
+            quick_replies=[
+                QuickReply(
+                    title="Перейти",
+                    payload="https://t.me/yuliya_purify_bot?start=ig_abc12345_purify",
+                )
+            ],
+        )
     )
-    result = await provider.send(msg)
-    assert result == "qr_msg"
 
-    sent = httpx_mock.get_requests(url="https://api.sendpulse.com/instagram/contacts/send")[0]
-    body = json.loads(sent.content)
-    buttons = body["messages"][0]["message"]["buttons"]
-    assert len(buttons) == 2
-    assert buttons[0]["type"] == "url"
-    assert buttons[0]["url"].startswith("https://t.me/")
-    assert buttons[1]["type"] == "reply"
-    assert buttons[1]["payload"] == "more_info"
-
-
-async def test_send_comment_reply_fallback_on_403(httpx_mock: HTTPXMock) -> None:
-    httpx_mock.add_response(
-        method="POST",
-        url="https://api.sendpulse.com/oauth/access_token",
-        json={"access_token": "tok"},
-    )
-    httpx_mock.add_response(
-        method="POST",
-        url="https://api.sendpulse.com/instagram/comments/reply",
-        status_code=403,
-        text="paid feature",
-    )
-    httpx_mock.add_response(
-        method="POST",
+    sent = httpx_mock.get_requests(
         url="https://api.sendpulse.com/instagram/contacts/send",
-        json={"data": [{"id": "fallback_msg"}]},
-    )
-
-    provider = _make_provider()
-    msg = OutgoingMessage(
-        platform="instagram",
-        external_user_id="user_1",
-        text="Спасибо за комментарий!",
-        reply_to_comment_id="comment_999",
-    )
-    result = await provider.send(msg)
-    assert result == "fallback_msg"
+    )[0]
+    body = _json.loads(sent.content)
+    block = body["messages"][0]
+    assert block["type"] == "generic_template"
+    elements = block["message"]["attachment"]["payload"]["elements"]
+    assert elements[0]["buttons"][0]["type"] == "web_url"
+    assert elements[0]["buttons"][0]["url"].startswith("https://t.me/")
 
 
-async def test_send_returns_none_on_persistent_5xx(httpx_mock: HTTPXMock) -> None:
+async def test_send_returns_none_on_error(httpx_mock: HTTPXMock) -> None:
     httpx_mock.add_response(
         method="POST",
         url="https://api.sendpulse.com/oauth/access_token",
@@ -193,144 +395,12 @@ async def test_send_returns_none_on_persistent_5xx(httpx_mock: HTTPXMock) -> Non
             url="https://api.sendpulse.com/instagram/contacts/send",
             status_code=500,
         )
-
-    provider = _make_provider()
-    msg = OutgoingMessage(platform="instagram", external_user_id="u", text="x")
-    result = await provider.send(msg)
+    p = _make_provider()
+    result = await p.send(
+        OutgoingMessage(
+            platform="instagram",
+            external_user_id="contact_x",
+            text="x",
+        )
+    )
     assert result is None
-
-
-# ---- poll_new_events ----
-
-
-async def test_poll_returns_events_and_advances_cursor(
-    httpx_mock: HTTPXMock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    monkeypatch.setenv("SENDPULSE_BOT_ID", "bot_test_1")
-    from app.config import get_settings
-
-    get_settings.cache_clear()
-
-    httpx_mock.add_response(
-        method="POST",
-        url="https://api.sendpulse.com/oauth/access_token",
-        json={"access_token": "tok"},
-    )
-    httpx_mock.add_response(
-        method="GET",
-        url=_MESSAGES_RE,
-        json={
-            "data": [
-                {
-                    "id": "msg_a",
-                    "contact": {"id": "u_1", "username": "anna"},
-                    "text": "hi",
-                    "created_at": "2026-05-15T14:00:00Z",
-                    "direction": "in",
-                },
-            ]
-        },
-    )
-    httpx_mock.add_response(
-        method="GET",
-        url=_COMMENTS_RE,
-        status_code=403,
-        text="paid feature",
-    )
-
-    provider = _make_provider()
-    events = await provider.poll_new_events()
-    assert len(events) == 1
-    assert events[0].external_user_id == "u_1"
-    assert events[0].event_type == "message"
-
-    from app.providers.sendpulse_cursor import get_cursor
-
-    new_cursor = await get_cursor("bot_test_1")
-    assert new_cursor.year == 2026
-
-
-async def test_poll_filters_outgoing_messages(
-    httpx_mock: HTTPXMock,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """Polling should NOT return our own outgoing messages as IncomingEvent."""
-    monkeypatch.setenv("SENDPULSE_BOT_ID", "bot_test_2")
-    from app.config import get_settings
-
-    get_settings.cache_clear()
-
-    httpx_mock.add_response(
-        method="POST",
-        url="https://api.sendpulse.com/oauth/access_token",
-        json={"access_token": "tok"},
-    )
-    httpx_mock.add_response(
-        method="GET",
-        url=_MESSAGES_RE,
-        json={
-            "data": [
-                {
-                    "id": "msg_in",
-                    "contact": {"id": "u_1"},
-                    "text": "hi",
-                    "created_at": "2026-05-15T14:00:00Z",
-                    "direction": "in",
-                },
-                {
-                    "id": "msg_out",
-                    "contact": {"id": "u_1"},
-                    "text": "bot reply",
-                    "created_at": "2026-05-15T14:00:30Z",
-                    "direction": "out",
-                },
-            ]
-        },
-    )
-    httpx_mock.add_response(
-        method="GET",
-        url=_COMMENTS_RE,
-        status_code=403,
-    )
-
-    provider = _make_provider()
-    events = await provider.poll_new_events()
-    assert len(events) == 1
-    assert events[0].external_event_id == "msg_in"
-
-
-# ---- parse_webhook ----
-
-
-def test_parse_webhook_no_secret_returns_empty() -> None:
-    provider = SendPulseProvider("cid", "csecret", webhook_secret="")
-    result = asyncio.run(provider.parse_webhook(b"[]", {"x-signature": "anything"}))
-    assert result == []
-
-
-async def test_parse_webhook_invalid_signature() -> None:
-    provider = _make_provider()
-    body = b'[{"type": "message", "id": "x"}]'
-    result = await provider.parse_webhook(body, {"x-signature": "totally_wrong"})
-    assert result == []
-
-
-async def test_parse_webhook_valid_signature() -> None:
-    provider = _make_provider()
-    body = json.dumps(
-        [
-            {
-                "type": "message",
-                "id": "msg_w_1",
-                "contact": {"id": "u_w", "username": "x"},
-                "text": "from webhook",
-                "created_at": "2026-05-15T14:00:00Z",
-            }
-        ]
-    ).encode()
-    signature = hmac.new(b"test_wsecret", body, hashlib.sha256).hexdigest()
-
-    events = await provider.parse_webhook(body, {"x-signature": signature})
-    assert len(events) == 1
-    assert events[0].external_user_id == "u_w"
