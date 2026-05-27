@@ -26,6 +26,16 @@ htmlcov/
 .DS_Store
 Thumbs.db
 
+# MS Word lock files (open-document temporaries)
+~$*
+
+# Per-machine Claude Code settings
+.claude/settings.json
+.claude/settings.local.json
+
+# Local working notes that may contain credentials
+Doc/tasks/sendpulse.md
+
 # Project
 *.log
 logs/
