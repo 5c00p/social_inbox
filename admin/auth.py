@@ -6,6 +6,7 @@ Credentials checked against ADMIN_BASIC_AUTH_USER and ADMIN_BASIC_AUTH_PASSWORD 
 Why not OAuth/SSO: only 1-2 users (Yulia + Victor), single-machine deploy.
 Upgrade path: when team grows, swap for streamlit-authenticator with hashed passwords.
 """
+
 from __future__ import annotations
 
 import secrets
@@ -26,8 +27,7 @@ def require_auth() -> str:
 
     if not expected_pass:
         st.error(
-            "ADMIN_BASIC_AUTH_PASSWORD не настроен. "
-            "Установи в .env и перезапусти контейнер."
+            "ADMIN_BASIC_AUTH_PASSWORD не настроен. " "Установи в .env и перезапусти контейнер."
         )
         st.stop()
 
@@ -41,10 +41,13 @@ def require_auth() -> str:
         submitted = st.form_submit_button("Войти")
 
     if submitted:
-        if (
-            secrets.compare_digest(username, expected_user)
-            and secrets.compare_digest(password, expected_pass)
-        ):
+        # Encode to bytes before compare_digest: the string overload only
+        # accepts ASCII, so a Cyrillic password (e.g. typed with the wrong
+        # keyboard layout) would raise TypeError. UTF-8 bytes work for any
+        # input while preserving constant-time semantics.
+        if secrets.compare_digest(
+            username.encode("utf-8"), expected_user.encode("utf-8")
+        ) and secrets.compare_digest(password.encode("utf-8"), expected_pass.encode("utf-8")):
             st.session_state["auth_ok"] = True
             st.session_state["auth_user"] = username
             st.rerun()

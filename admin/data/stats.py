@@ -1,15 +1,15 @@
 """Aggregate statistics for the dashboard."""
+
 from __future__ import annotations
 
 import asyncpg
 
-from app.repos.pool import get_pool
+from admin.data import _db
 
 
 async def daily_new_leads(days: int = 14) -> list[asyncpg.Record]:
     """Number of new social_users per day, last N days."""
-    pool = await get_pool()
-    return await pool.fetch(
+    return await _db.fetch(
         """
         SELECT DATE_TRUNC('day', first_seen_at) AS day,
                COUNT(*)::int AS count
@@ -25,8 +25,7 @@ async def daily_new_leads(days: int = 14) -> list[asyncpg.Record]:
 
 async def conversion_to_telegram(days: int = 30) -> dict[str, int]:
     """Of users seen in last N days, how many also have tg_user_id?"""
-    pool = await get_pool()
-    row = await pool.fetchrow(
+    row = await _db.fetchrow(
         """
         SELECT
             COUNT(*) FILTER (WHERE first_seen_at >= NOW() - ($1 * INTERVAL '1 day'))::int AS total,
@@ -45,8 +44,7 @@ async def conversion_to_telegram(days: int = 30) -> dict[str, int]:
 
 async def handover_breakdown(days: int = 30) -> list[asyncpg.Record]:
     """How many handovers per source (operator_request, symptom, claude_tool, etc.)."""
-    pool = await get_pool()
-    return await pool.fetch(
+    return await _db.fetch(
         """
         SELECT
             COALESCE(SPLIT_PART(handover_reason, ':', 1), 'unknown') AS source,
@@ -63,8 +61,7 @@ async def handover_breakdown(days: int = 30) -> list[asyncpg.Record]:
 
 async def claude_token_usage(days: int = 7) -> list[asyncpg.Record]:
     """Daily Claude token cost (input + output)."""
-    pool = await get_pool()
-    return await pool.fetch(
+    return await _db.fetch(
         """
         SELECT DATE_TRUNC('day', created_at) AS day,
                SUM(claude_tokens_in)::int  AS tokens_in,
