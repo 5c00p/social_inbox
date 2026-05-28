@@ -1,4 +1,5 @@
 """Inbox page: list conversations, handover-pending first."""
+
 from __future__ import annotations
 
 import asyncio
@@ -6,6 +7,7 @@ import asyncio
 import streamlit as st
 
 from admin.data import conversations as conv_data
+from admin.navigation import PENDING_PAGE_KEY
 
 
 def render(actor: str) -> None:
@@ -24,11 +26,13 @@ def render(actor: str) -> None:
         if st.button("🔄 Обновить", use_container_width=True):
             st.rerun()
 
-    rows = asyncio.run(conv_data.list_conversations(
-        status_filter=None if status_filter == "Все" else status_filter,
-        search_username=search or None,
-        limit=200,
-    ))
+    rows = asyncio.run(
+        conv_data.list_conversations(
+            status_filter=None if status_filter == "Все" else status_filter,
+            search_username=search or None,
+            limit=200,
+        )
+    )
 
     if not rows:
         st.info("Пока пусто.")
@@ -54,9 +58,18 @@ def render(actor: str) -> None:
                     f" · short_id: `{row['short_id']}`"
                 )
             with c2:
-                if st.button("Открыть", key=f"open_{row['conversation_id']}", use_container_width=True):
+                if st.button(
+                    "Открыть",
+                    key=f"open_{row['conversation_id']}",
+                    use_container_width=True,
+                ):
                     st.session_state["selected_conversation_id"] = row["conversation_id"]
-                    st.session_state["page_selector"] = "💬 Диалог"
+                    # Streamlit forbids writing to the same key that backs an
+                    # already-instantiated widget ('page_selector' is the sidebar
+                    # radio's key). Use a sentinel key instead — streamlit_app.main
+                    # pops it BEFORE the radio widget is created and uses it to
+                    # pick the radio's initial index.
+                    st.session_state[PENDING_PAGE_KEY] = "💬 Диалог"
                     st.rerun()
 
 
