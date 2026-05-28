@@ -7,6 +7,7 @@ import asyncio
 import streamlit as st
 
 from admin.data import conversations as conv_data
+from admin.labels import STATUS_FILTER_LABELS_RU, STATUS_FILTER_OPTIONS
 from admin.navigation import PENDING_PAGE_KEY
 
 
@@ -17,7 +18,8 @@ def render(actor: str) -> None:
     with cols[0]:
         status_filter = st.selectbox(
             "Статус",
-            options=["Все", "active", "handover_pending", "handover_done", "closed"],
+            options=STATUS_FILTER_OPTIONS,
+            format_func=lambda v: STATUS_FILTER_LABELS_RU.get(v, v),
             index=0,
         )
     with cols[1]:
